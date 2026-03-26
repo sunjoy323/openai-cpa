@@ -57,6 +57,16 @@ _free = _c.get("freemail", {})
 FREEMAIL_API_URL = _free.get("api_url", "")
 FREEMAIL_API_TOKEN = _free.get("api_token", "")
 
+_cm = _c.get("cloudmail", {})
+CM_API_URL = _cm.get("api_url", "").rstrip('/')
+CM_ADMIN_EMAIL = _cm.get("admin_email", "")
+CM_ADMIN_PASS = _cm.get("admin_password", "")
+_CM_TOKEN_CACHE = None
+
+_mc = _c.get("mail_curl", {})
+MC_API_BASE = _mc.get("api_base", "").rstrip('/')
+MC_KEY = _mc.get("key", "")
+
 ADMIN_AUTH = _c.get("admin_auth", "")
 
 MAX_OTP_RETRIES = _c.get("max_otp_retries", 5)
@@ -73,6 +83,8 @@ CPA_API_TOKEN = _cpa.get("api_token", "")
 MIN_ACCOUNTS_THRESHOLD = _cpa.get("min_accounts_threshold", 30)
 BATCH_REG_COUNT = _cpa.get("batch_reg_count", 1)
 MIN_REMAINING_WEEKLY_PERCENT = _cpa.get("min_remaining_weekly_percent", 80)
+REMOVE_ON_LIMIT_REACHED = _cpa.get("remove_on_limit_reached", False)
+REMOVE_DEAD_ACCOUNTS = _cpa.get("remove_dead_accounts", False)
 CHECK_INTERVAL_MINUTES = _cpa.get("check_interval_minutes", 60)
 
 _normal = _c.get("normal_mode", {})
@@ -119,15 +131,30 @@ def ts() -> str:
     """获取当前时间戳字符串"""
     return datetime.now().strftime("%H:%M:%S")
     
-def mask_email(email: str) -> str:
-    """隐藏邮箱 @ 后面的域名，用于日志脱敏"""
-    if not ENABLE_EMAIL_MASKING:
-        return email
+def mask_email(text: str) -> str:
+    """隐藏邮箱 @ 后面的域名，用于日志脱敏 (兼容标准邮箱和本地 Token 文件名)"""
+    if not ENABLE_EMAIL_MASKING or not text:
+        return text
 
-    if not email or "@" not in email:
-        return email
-    prefix, domain = email.split("@", 1)
-    return f"{prefix}@***.***"
+    if "@" in text:
+        prefix, domain = text.split("@", 1)
+        return f"{prefix}@***.***"
+
+    match = re.match(r"token_(.+)_(\d{10,})\.json", text)
+    if match:
+        email_part = match.group(1)
+        timestamp = match.group(2)
+
+        mid = len(email_part) // 2
+        masked_email = email_part[:mid] + "***"
+        return f"token_{masked_email}_{timestamp}.json"
+        
+    if len(text) > 8 and ".json" in text:
+        name_part = text.replace(".json", "")
+        mid = len(name_part) // 2
+        return f"{name_part[:mid]}***.json"
+
+    return text
     
 def _ssl_verify() -> bool:
     flag = os.getenv("OPENAI_SSL_VERIFY", "1").strip().lower()
@@ -137,6 +164,38 @@ def _skip_net_check() -> bool:
     flag = os.getenv("SKIP_NET_CHECK", "0").strip().lower()
     return flag in {"1", "true", "yes", "on"}
 
+def get_mc_email(proxies=None):
+    """请求 mail-curl 接口创建/刷新邮箱"""
+    try:
+        url = f"{MC_API_BASE}/api/remail?key={MC_KEY}"
+        res = requests.post(url, proxies=proxies, verify=_ssl_verify(), timeout=15)
+        data = res.json()
+        if data.get("email"):
+            return data["email"], data["id"]
+    except Exception as e:
+        print(f"[{ts()}] [ERROR] mail-curl 获取邮箱失败: {e}")
+    return None, None
+
+def get_cm_token(proxies=None):
+    """用于生成 CloudMail 确认身份的令牌"""
+    global _CM_TOKEN_CACHE
+    if _CM_TOKEN_CACHE:
+        return _CM_TOKEN_CACHE
+    
+    try:
+        url = f"{CM_API_URL}/api/public/genToken"
+        payload = {"email": CM_ADMIN_EMAIL, "password": CM_ADMIN_PASS}
+        res = requests.post(url, json=payload, proxies=proxies, verify=_ssl_verify(), timeout=15)
+        data = res.json()
+        if data.get("code") == 200:
+            _CM_TOKEN_CACHE = data["data"]["token"]
+            return _CM_TOKEN_CACHE
+        else:
+            print(f"[{ts()}] [ERROR] CloudMail Token 生成失败: {data.get('message')}")
+    except Exception as e:
+        print(f"[{ts()}] [ERROR] CloudMail 接口请求异常: {e}")
+    return None
+
 def get_email_and_token(proxies: Any = None) -> tuple:
     """兼容三模式的邮箱获取逻辑 (支持多域名随机轮换)"""
     mail_proxies = proxies if USE_PROXY_FOR_EMAIL else None
@@ -145,6 +204,49 @@ def get_email_and_token(proxies: Any = None) -> tuple:
     suffix = ''.join(random.choices(string.ascii_lowercase, k=random.randint(1, 3)))
     prefix = letters + digits + suffix
     
+    if EMAIL_API_MODE == "mail_curl":
+        try:
+            url = f"{MC_API_BASE}/api/remail?key={MC_KEY}"
+            res = requests.post(url, proxies=mail_proxies, verify=_ssl_verify(), timeout=15)
+            data = res.json()
+            if data.get("email") and data.get("id"):
+                email = data["email"]
+                mailbox_id = data["id"]
+                print(f"[{ts()}] [INFO] mail-curl 分配邮箱: {email} (BoxID: {mailbox_id})")
+                return email, mailbox_id
+        except Exception as e:
+            print(f"[{ts()}] [ERROR] mail-curl 获取邮箱异常: {e}")
+        return None, None
+    
+    if EMAIL_API_MODE == "cloudmail":
+        token = get_cm_token(mail_proxies)
+        if not token: 
+            print(f"[{ts()}] [ERROR] 未能获取 CloudMail Token，跳过注册")
+            return None, None
+        
+        domain_list = [d.strip() for d in MAIL_DOMAINS.split(",") if d.strip()]
+        if not domain_list:
+            print(f"[{ts()}] [ERROR] MAIL_DOMAINS 未配置")
+            return None, None
+            
+        selected_domain = random.choice(domain_list)
+        email_str = f"{prefix}@{selected_domain}"
+        
+        try:
+            url = f"{CM_API_URL}/api/public/addUser"
+            headers = {"Authorization": token}
+            body = {"list": [{"email": email_str}]}
+            res = requests.post(url, headers=headers, json=body, proxies=mail_proxies, timeout=15)
+            
+            if res.json().get("code") == 200:
+                print(f"[{ts()}] [INFO] CloudMail 成功创建用户: {email_str}")
+                return email_str, ""
+            else:
+                print(f"[{ts()}] [ERROR] CloudMail 创建用户失败: {res.text}")
+        except Exception as e:
+            print(f"[{ts()}] [ERROR] CloudMail 添加用户异常: {e}")
+        return None, None
+        
     if EMAIL_API_MODE == "freemail":
         headers = {"Authorization": f"Bearer {FREEMAIL_API_TOKEN}", "Content-Type": "application/json"}
         api_params = {}
@@ -313,6 +415,7 @@ class ProxiedIMAP4_SSL(imaplib.IMAP4_SSL):
 
 def get_oai_code(email: str, jwt: str = "", proxies: Any = None, processed_mail_ids: set = None, pattern: str = OTP_CODE_PATTERN) -> str:
     """基于 Mail ID 过滤的验证码提取 (支持 JWT 或 Admin 双重鉴权)"""
+    mailbox_id = jwt 
     mail_proxies = proxies if USE_PROXY_FOR_EMAIL else None
     base_url = GPTMAIL_BASE.rstrip('/')
     print(f"[{ts()}] [INFO] 等待接收验证码 ({mask_email(email)}) ", end="", flush=True)
@@ -362,6 +465,53 @@ def get_oai_code(email: str, jwt: str = "", proxies: Any = None, processed_mail_
     start_time = time.time()
     for attempt in range(20):
         try:
+            if EMAIL_API_MODE == "mail_curl":
+                inbox_url = f"{MC_API_BASE}/api/inbox?key={MC_KEY}&mailbox_id={mailbox_id}"
+                res = requests.get(inbox_url, proxies=mail_proxies, verify=_ssl_verify(), timeout=10)
+                
+                if res.status_code == 200:
+                    mail_list = res.json()
+                    
+                    if isinstance(mail_list, list) and len(mail_list) > 0:
+                        for mail_item in mail_list:
+                            m_id = mail_item.get("mail_id")
+                            s_name = mail_item.get("sender_name", "").lower()
+                            
+                            if m_id and m_id not in processed_mail_ids and "openai" in s_name:
+                                detail_url = f"{MC_API_BASE}/api/mail?key={MC_KEY}&id={m_id}"
+                                detail_res = requests.get(detail_url, proxies=mail_proxies, verify=_ssl_verify(), timeout=10)
+                                
+                                if detail_res.status_code == 200:
+                                    detail = detail_res.json()
+                                    body = f"{detail.get('subject','')}\n{detail.get('content','')}\n{detail.get('html','')}"
+                                    
+                                    code = _extract_otp_code(body)
+                                    if code:
+                                        processed_mail_ids.add(m_id)
+                                        print(f"\n[{ts()}] [SUCCESS] 发现验证码: {code} (来自: {mail_item.get('sender_name')})")
+                                        return code
+            if EMAIL_API_MODE == "cloudmail":
+                token = get_cm_token(mail_proxies)
+                if token:
+                    url = f"{CM_API_URL}/api/public/emailList"
+                    payload = {"toEmail": email, "timeSort": "desc", "size": 10}
+                    res = requests.post(url, headers={"Authorization": token}, json=payload, 
+                                        proxies=mail_proxies, timeout=15)
+                    
+                    if res.status_code == 200:
+                        mails = res.json().get("data", [])
+                        for m in mails:
+                            m_id = str(m.get("emailId"))
+                            if m_id in processed_mail_ids: continue
+                            
+                            content = f"{m.get('subject', '')}\n{m.get('text', '')}"
+                            
+                            if "openai" in m.get("sendEmail", "").lower() or "openai" in content.lower():
+                                code = _extract_otp_code(content)
+                                if code:
+                                    processed_mail_ids.add(m_id)
+                                    print(f"\n[{ts()}] [SUCCESS] CloudMail 提取验证码成功: {code}")
+                                    return code
             if EMAIL_API_MODE == "imap":
                 if not mail_conn:
                     try:
@@ -1083,7 +1233,7 @@ def run(proxy: Optional[str]) -> tuple:
 
         workspace_id = str((auth_json.get("workspaces") or [{}])[0].get("id", "")).strip()
         if not workspace_id:
-            print(f"[{ts()}] [ERROR] 无法从解析 workspaces 数据或 ID 为空")
+            print(f"[{ts()}] [ERROR] 域名被风控，请更换域名")
             return None, None
         select_resp = _post_with_retry(s, "https://auth.openai.com/api/accounts/workspace/select", headers={"content-type": "application/json"}, json_body={"workspace_id": workspace_id}, proxies=proxies)
 
@@ -1153,6 +1303,32 @@ def _normalize_cpa_auth_files_url(api_url: str) -> str:
     if lower_url.endswith("/v0/management") or lower_url.endswith("/management"): return f"{normalized}/auth-files"
     if lower_url.endswith("/v0"): return f"{normalized}/management/auth-files"
     return f"{normalized}/v0/management/auth-files"
+
+def set_cpa_auth_file_status(api_url: str, api_token: str, filename: str, disabled: bool = True) -> bool:
+    """设置 CPA 中凭证的启用/禁用状态"""
+    base_url = _normalize_cpa_auth_files_url(api_url)
+    status_url = f"{base_url}/status"
+    
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "name": filename,
+        "disabled": disabled
+    }
+    
+    try:
+        res = requests.patch(status_url, headers=headers, json=payload, timeout=15, impersonate="chrome131")
+        if res.status_code in (200, 204):
+            return True
+        else:
+            print(f"[{ts()}] [ERROR] 切换凭证状态失败 (HTTP {res.status_code}): {res.text}")
+            return False
+    except Exception as e:
+        print(f"[{ts()}] [ERROR] 切换凭证状态异常: {e}")
+        return False
+
 
 def upload_to_cpa_integrated(token_data: dict, api_url: str, api_token: str, custom_filename: str = None) -> Tuple[bool, str]:
     upload_url = _normalize_cpa_auth_files_url(api_url)
@@ -1290,7 +1466,8 @@ def refresh_oauth_token(refresh_token: str, proxies: Any = None) -> Tuple[bool, 
                 "last_refresh": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
                 "expired": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + max(expires_in, 0)))
             }
-        return False, {"error": f"HTTP {resp.status_code}: {resp.text}"}
+        # return False, {"error": f"HTTP {resp.status_code}: {resp.text}"}
+        return False, {"error": f"HTTP {resp.status_code}"}
     except Exception as e:
         return False, {"error": str(e)}
 
@@ -1349,12 +1526,45 @@ async def cpa_main_loop(args):
             valid_count = 0
             for i, item in enumerate(codex_files, 1):
                 name = item.get("name")
+                is_disabled = item.get("disabled", False) 
+                
                 is_ok, msg = test_cliproxy_auth_file(item, CPA_API_URL, CPA_API_TOKEN)
+                
                 if is_ok:
-                    valid_count += 1
-                    print(f"[{ts()}] [INFO] 测活 [{i}/{len(codex_files)}]: {mask_email(name)} 状态健康")
+                    if is_disabled:
+                        print(f"[{ts()}] [INFO] 测活 [{i}/{len(codex_files)}]: {mask_email(name)} 额度已恢复且有效，准备启用...")
+                        if set_cpa_auth_file_status(CPA_API_URL, CPA_API_TOKEN, name, disabled=False):
+                            print(f"[{ts()}] [SUCCESS] 凭证 {mask_email(name)} 已成功启用！")
+                            valid_count += 1
+                        else:
+                            print(f"[{ts()}] [ERROR] 凭证 {mask_email(name)} 启用失败。")
+                    else:
+                        valid_count += 1
+                        print(f"[{ts()}] [INFO] 测活 [{i}/{len(codex_files)}]: {mask_email(name)} 状态健康")
+                
                 else:
-                    print(f"[{ts()}] [WARNING] 测活 [{i}/{len(codex_files)}]: 凭证 {mask_email(name)} 失效，正在尝试刷新 Token 复活...")
+                    print(f"[{ts()}] [WARNING] 测活 [{i}/{len(codex_files)}]: 凭证 {mask_email(name)} 失效，原因: {msg}")
+                    
+                    if "周限额" in msg or "usage_limit_reached" in msg:
+                        if REMOVE_ON_LIMIT_REACHED:
+                            print(f"[{ts()}] [INFO] 触发限额剔除规则，执行物理剔除...")
+                            requests.delete(
+                                _normalize_cpa_auth_files_url(CPA_API_URL), 
+                                headers={"Authorization": f"Bearer {CPA_API_TOKEN}"}, 
+                                params={"name": name}
+                            )
+                        else:
+                            if not is_disabled:
+                                print(f"[{ts()}] [INFO] 测活 [{i}/{len(codex_files)}]: 凭证额度耗尽或低于设定值，正在将其状态设置为 [禁用]...")
+                                if set_cpa_auth_file_status(CPA_API_URL, CPA_API_TOKEN, name, disabled=True):
+                                    print(f"[{ts()}] [SUCCESS] 测活 [{i}/{len(codex_files)}]: 凭证 {mask_email(name)} 已成功禁用，等待额度重置。")
+                                else:
+                                    print(f"[{ts()}] [ERROR] 测活 [{i}/{len(codex_files)}]: 凭证 {mask_email(name)} 禁用失败！")
+                            else:
+                                print(f"[{ts()}] [INFO] 测活 [{i}/{len(codex_files)}]: 账号额度尚未恢复，继续保持禁用状态。")
+                        continue
+                
+                    print(f"[{ts()}] [INFO] 测活 [{i}/{len(codex_files)}]: 凭证 {mask_email(name)} 准备尝试刷新 Token 复活...")
                     refresh_success = False
                     
                     is_runtime_only = item.get("runtime_only", False)
@@ -1409,17 +1619,26 @@ async def cpa_main_loop(args):
                             else:
                                 print(f"[{ts()}] [ERROR] 刷新后覆盖CPA失败: {up_msg}")
                         else:
-                            print(f"[{ts()}] [WARNING] {mask_email(name)} Token 刷新请求被拒绝: {new_tokens.get('error', '未知错误')}")
+                            print(f"[{ts()}] [WARNING] {mask_email(name)} Token 复活请求被拒绝: {new_tokens.get('error', '未知错误')}")
                     else:
                         print(f"[{ts()}] [WARNING] {mask_email(name)} 未找到有效数据，无法抢救")
                     
                     if not refresh_success:
-                        print(f"[{ts()}] [WARNING] 测活 [{i}/{len(codex_files)}]: 凭证 {mask_email(name)} 彻底死亡，执行物理剔除...")
-                        requests.delete(
-                            _normalize_cpa_auth_files_url(CPA_API_URL), 
-                            headers={"Authorization": f"Bearer {CPA_API_TOKEN}"}, 
-                            params={"name": name}
-                        )
+                        if REMOVE_DEAD_ACCOUNTS:
+                            print(f"[{ts()}] [WARNING] 测活 [{i}/{len(codex_files)}]: 凭证 {mask_email(name)} 彻底死亡，执行物理剔除...")
+                            requests.delete(
+                                _normalize_cpa_auth_files_url(CPA_API_URL), 
+                                headers={"Authorization": f"Bearer {CPA_API_TOKEN}"}, 
+                                params={"name": name}
+                            )
+                        else:
+                            if not is_disabled:
+                                print(f"[{ts()}] [INFO] 测活 [{i}/{len(codex_files)}]: 凭证 {mask_email(name)} ，根据配置保留不删除，正在将其(禁用)...")
+                                if set_cpa_auth_file_status(CPA_API_URL, CPA_API_TOKEN, name, disabled=True):
+                                    print(f"[{ts()}] [SUCCESS] 测活 [{i}/{len(codex_files)}]: 死亡凭证 {mask_email(name)} 已成功禁用。")
+                            else:
+                                print(f"[{ts()}] 测活 [{i}/{len(codex_files)}]: 凭证 {mask_email(name)} 已死亡，当前已是禁用状态，根据配置保留不删除。")
+                                
             print(f"[{ts()}] [INFO] 巡检结束，当前仓库有效数: {valid_count}")
 
             if valid_count < MIN_ACCOUNTS_THRESHOLD:
