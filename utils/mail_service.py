@@ -345,6 +345,63 @@ def _create_imap_conn():
             return imaplib.IMAP4_SSL(cfg.IMAP_SERVER, cfg.IMAP_PORT, timeout=15)
     return imaplib.IMAP4_SSL(cfg.IMAP_SERVER, cfg.IMAP_PORT, timeout=15)
 
+
+def _should_send_imap_id():
+    """网易系 IMAP 服务器在 SELECT 前通常要求发送 ID 标识。"""
+    host = str(cfg.IMAP_SERVER or "").lower()
+    user = str(cfg.IMAP_USER or "").lower()
+    netease_hosts = ("163.com", "126.com", "yeah.net", "188.com")
+    netease_domains = ("@163.com", "@126.com", "@yeah.net", "@188.com")
+    return any(key in host for key in netease_hosts) or user.endswith(netease_domains)
+
+
+def _imap_quote(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _send_imap_id_if_needed(mail_conn):
+    if not _should_send_imap_id():
+        return
+
+    support_email = cfg.IMAP_USER if "@" in str(cfg.IMAP_USER) else "noreply@example.com"
+    id_pairs = [
+        ("name", "openai-cpa"),
+        ("version", "1.0.0"),
+        ("vendor", "openai-cpa"),
+        ("support-email", support_email),
+    ]
+    payload = " ".join(f'"{key}" "{_imap_quote(value)}"' for key, value in id_pairs if value)
+    if not payload:
+        return
+
+    try:
+        command = getattr(mail_conn, "xatom", None) or getattr(mail_conn, "_simple_command", None)
+        if not command:
+            print(f"\n[{cfg.ts()}] [WARNING] 当前 IMAP 客户端不支持 ID 命令，跳过 163 邮箱特殊处理。")
+            return
+        typ, data = command("ID", f"({payload})")
+        if str(typ).upper() == "OK":
+            print(f"\n[{cfg.ts()}] [INFO] 已发送 IMAP ID 标识。")
+        else:
+            print(f"\n[{cfg.ts()}] [WARNING] IMAP ID 返回异常: {typ} {data}")
+    except Exception as e:
+        print(f"\n[{cfg.ts()}] [WARNING] 发送 IMAP ID 失败（忽略，继续）: {e}")
+
+
+def _create_and_login_imap_conn():
+    """建立并登录 IMAP 连接，必要时补发 ID 标识。"""
+    mail_conn = _create_imap_conn()
+    try:
+        mail_conn.login(cfg.IMAP_USER, cfg.IMAP_PASS.replace(" ", ""))
+        _send_imap_id_if_needed(mail_conn)
+        return mail_conn
+    except Exception:
+        try:
+            mail_conn.logout()
+        except Exception:
+            pass
+        raise
+
 def get_oai_code(
     email: str,
     jwt: str = "",
@@ -366,10 +423,12 @@ def get_oai_code(
     mail_conn = None
     if mode == "imap":
         try:
-            mail_conn = _create_imap_conn()
-            mail_conn.login(cfg.IMAP_USER, cfg.IMAP_PASS.replace(" ", ""))
+            mail_conn = _create_and_login_imap_conn()
         except Exception as e:
-            print(f"\n[{cfg.ts()}] [ERROR] IMAP 初始登录失败: {e}")
+            extra_tip = ""
+            if "unsafe login" in str(e).lower() and _should_send_imap_id():
+                extra_tip = "，请确认邮箱已开启 IMAP 并使用客户端授权码"
+            print(f"\n[{cfg.ts()}] [ERROR] IMAP 初始登录失败: {e}{extra_tip}")
             mail_conn = None
 
     for _ in range(20):
@@ -427,9 +486,10 @@ def get_oai_code(
             elif mode == "imap":
                 if not mail_conn:
                     try:
-                        mail_conn = imaplib.IMAP4_SSL(cfg.IMAP_SERVER, cfg.IMAP_PORT, timeout=15)
-                        mail_conn.login(cfg.IMAP_USER, cfg.IMAP_PASS.replace(" ", ""))
-                    except Exception:
+                        mail_conn = _create_and_login_imap_conn()
+                    except Exception as e:
+                        if "unsafe login" in str(e).lower() and _should_send_imap_id():
+                            print(f"\n[{cfg.ts()}] [ERROR] IMAP 重连失败: {e}，请确认邮箱已开启 IMAP 并使用客户端授权码。")
                         time.sleep(5)
                         continue
 
@@ -439,8 +499,12 @@ def get_oai_code(
                 for folder in folders:
                     try:
                         mail_conn.noop()
-                        status, _ = mail_conn.select(folder, readonly=True)
+                        status, select_data = mail_conn.select(folder, readonly=True)
                         if status != "OK":
+                            if any("unsafe login" in str(item).lower() for item in (select_data or [])):
+                                print(f"\n[{cfg.ts()}] [ERROR] IMAP 文件夹选择被拒绝: {select_data}")
+                                mail_conn = None
+                                break
                             continue
                         status, messages = mail_conn.search(
                             None, f'(UNSEEN FROM "openai.com" TO "{email}")'
