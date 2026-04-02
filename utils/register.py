@@ -258,6 +258,16 @@ def _response_error_fields(resp: Any) -> Dict[str, Any]:
     return {}
 
 
+def _json_dict(resp: Any) -> Dict[str, Any]:
+    if resp is None:
+        return {}
+    try:
+        data = resp.json()
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _registration_failure_hint(stage: str, status_code: Any) -> str:
     try:
         code = int(status_code)
@@ -335,6 +345,10 @@ def _log_oauth_chain_failure(
     if trace:
         for idx, item in enumerate(trace[-8:], 1):
             print(f"[{cfg.ts()}] [DEBUG] OAuth 跳转轨迹[{idx}]: {item}")
+
+
+def _compact_json(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 def _oai_headers(did: str, extra: dict = None) -> dict:
     h = {
@@ -566,7 +580,7 @@ def _generate_password(length: int = 16) -> str:
 
 def generate_random_user_info() -> dict:
     name = f"{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}"
-    year  = random.randint(datetime.now().year - 45, datetime.now().year - 18)
+    year  = random.randint(datetime.now().year - 38, datetime.now().year - 22)
     month = random.randint(1, 12)
     day   = random.randint(1, 28)
     return {"name": name, "birthdate": f"{year}-{month:02d}-{day:02d}"}
@@ -583,6 +597,103 @@ def _parse_workspace_from_auth_cookie(auth_cookie: str) -> list:
             return workspaces
     claims = _decode_jwt_segment(parts[0])
     return claims.get("workspaces") or []
+
+
+def _choose_workspace_id(workspaces: list) -> str:
+    for workspace in workspaces:
+        if not isinstance(workspace, dict):
+            continue
+        workspace_id = str(workspace.get("id") or workspace.get("workspace_id") or "").strip()
+        if workspace_id:
+            return workspace_id
+    return ""
+
+
+def _select_workspace_and_submit(
+    session: Any,
+    oauth: OAuthStart,
+    *,
+    proxies: Any = None,
+    referer: str = "https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
+    trace: Optional[list] = None,
+    stage: str = "workspace_select",
+) -> Optional[str]:
+    auth_cookie = session.cookies.get("oai-client-auth-session") or ""
+    workspaces = _parse_workspace_from_auth_cookie(auth_cookie)
+    if not workspaces:
+        _log_oauth_chain_failure(
+            f"{stage}_missing_workspace",
+            current_url=referer,
+            trace=trace,
+            note="授权 Cookie 里没有 workspace 信息，无法继续提交 workspace/select。",
+        )
+        return None
+
+    workspace_id = _choose_workspace_id(workspaces)
+    if not workspace_id:
+        _log_oauth_chain_failure(
+            f"{stage}_missing_workspace_id",
+            current_url=referer,
+            trace=trace,
+            note="workspace 列表存在，但无法解析 id/workspace_id。",
+        )
+        return None
+
+    print(f"[{cfg.ts()}] [INFO] 检测到可用工作空间，准备提交 workspace/select: {workspace_id}")
+    did = session.cookies.get("oai-did") or ""
+    select_resp = _post_with_retry(
+        session,
+        "https://auth.openai.com/api/accounts/workspace/select",
+        headers=_oai_headers(did, {
+            "Referer": referer,
+            "content-type": "application/json",
+        }),
+        data=_compact_json({"workspace_id": workspace_id}),
+        proxies=proxies,
+    )
+    if select_resp.status_code != 200:
+        _log_registration_http_failure("Workspace 选择", select_resp)
+        _log_oauth_chain_failure(
+            stage,
+            current_url=referer,
+            resp=select_resp,
+            trace=trace,
+            note="workspace/select 未返回 200。",
+        )
+        return None
+
+    continue_url = _extract_next_url(_json_dict(select_resp))
+    if not continue_url:
+        _log_oauth_chain_failure(
+            f"{stage}_missing_continue_url",
+            current_url=referer,
+            resp=select_resp,
+            trace=trace,
+            note="workspace/select 成功，但响应里没有 continue_url/page_type。",
+        )
+        return None
+
+    _, final_url = _follow_redirect_chain_local(
+        session, continue_url, proxies, trace=trace, stage=f"{stage}_follow"
+    )
+    if "code=" in final_url and "state=" in final_url:
+        return submit_callback_url(
+            callback_url=final_url,
+            expected_state=oauth.state,
+            code_verifier=oauth.code_verifier,
+            redirect_uri=oauth.redirect_uri,
+            proxies=proxies,
+        )
+
+    _log_oauth_chain_failure(
+        f"{stage}_no_callback",
+        current_url=final_url,
+        next_url=continue_url,
+        resp=select_resp,
+        trace=trace,
+        note="workspace/select 之后仍未拿到 code/state。",
+    )
+    return None
 
 
 def run(proxy: Optional[str]) -> tuple:
@@ -639,7 +750,7 @@ def run(proxy: Optional[str]) -> tuple:
                 "openai-sentinel-token": sentinel_signup,
                 "content-type":          "application/json",
             }),
-            json_body={"username": {"value": email, "kind": "email"}, "screen_hint": "signup"},
+            data=_compact_json({"username": {"value": email, "kind": "email"}, "screen_hint": "signup"}),
             proxies=proxies,
         )
 
@@ -660,7 +771,7 @@ def run(proxy: Optional[str]) -> tuple:
                 "openai-sentinel-token": sentinel_reg,
                 "content-type":          "application/json",
             }),
-            json_body={"password": password, "username": email},
+            data=_compact_json({"password": password, "username": email}),
             proxies=proxies,
         )
 
@@ -668,14 +779,11 @@ def run(proxy: Optional[str]) -> tuple:
             _log_registration_http_failure("密码提交环节", pwd_resp)
             return None, None
 
-        try:
-            reg_json = pwd_resp.json()
-            need_otp = (
-                "verify" in reg_json.get("continue_url", "")
-                or "otp"  in (reg_json.get("page") or {}).get("type", "")
-            )
-        except Exception:
-            need_otp = False
+        reg_json = _json_dict(pwd_resp)
+        need_otp = (
+            "verify" in reg_json.get("continue_url", "")
+            or "otp"  in (reg_json.get("page") or {}).get("type", "")
+        )
 
         if need_otp:
             otp_url = reg_json.get("continue_url", "")
@@ -688,7 +796,7 @@ def run(proxy: Optional[str]) -> tuple:
                         "openai-sentinel-token": sentinel_reg,
                         "content-type":          "application/json",
                     },
-                    json_body={}, proxies=proxies, timeout=30,
+                    data=_compact_json({}), proxies=proxies, timeout=30,
                 )
 
             code = ""
@@ -703,7 +811,7 @@ def run(proxy: Optional[str]) -> tuple:
                                 "openai-sentinel-token": sentinel_reg,
                                 "content-type": "application/json",
                             },
-                            json_body={}, proxies=proxies, timeout=15,
+                            data=_compact_json({}), proxies=proxies, timeout=15,
                         )
                         time.sleep(2)
                     except Exception as e:
@@ -726,11 +834,57 @@ def run(proxy: Optional[str]) -> tuple:
                     "openai-sentinel-token": sentinel_otp,
                     "content-type":          "application/json",
                 },
-                json_body={"code": code}, proxies=proxies,
+                data=_compact_json({"code": code}), proxies=proxies,
             )
             if code_resp.status_code != 200:
                 print(f"[{cfg.ts()}] [ERROR] 验证码校验未通过: {code_resp.text}")
                 return None, None
+
+        about_you_referer = "https://auth.openai.com/about-you"
+        if need_otp:
+            code_resp_json = _json_dict(code_resp)
+            about_you_url = _extract_next_url(code_resp_json)
+            if about_you_url:
+                print(
+                    f"[{cfg.ts()}] [INFO] 邮箱验证码校验通过，继续推进注册资料页: "
+                    f"{_short_text(about_you_url, 180)}"
+                )
+                _, about_you_referer = _follow_redirect_chain_local(
+                    s_reg,
+                    about_you_url,
+                    proxies,
+                    stage="signup_post_email_otp",
+                )
+                if "code=" in about_you_referer and "state=" in about_you_referer:
+                    print(f"[{cfg.ts()}] [SUCCESS] 邮箱验证后已直接命中授权回调。")
+                    return submit_callback_url(
+                        callback_url=about_you_referer,
+                        expected_state=oauth_reg.state,
+                        code_verifier=oauth_reg.code_verifier,
+                        redirect_uri=oauth_reg.redirect_uri,
+                        proxies=proxies,
+                    ), password
+
+        try:
+            about_you_resp = s_reg.get(
+                about_you_referer,
+                proxies=proxies,
+                verify=_ssl_verify(),
+                timeout=15,
+            )
+            about_you_referer = str(getattr(about_you_resp, "url", "") or about_you_referer)
+            if about_you_referer.endswith("/add-phone"):
+                _log_oauth_chain_failure(
+                    "signup_profile_phone_verification",
+                    current_url=about_you_referer,
+                    resp=about_you_resp,
+                    note="提交账户资料前已命中手机号验证页，无法继续自动化创建账户。",
+                )
+                return None, None
+            if getattr(about_you_resp, "status_code", 0) not in (200, 204):
+                print(f"[{cfg.ts()}] [WARNING] 注册资料页预热返回异常: {_response_debug_summary(about_you_resp)}")
+        except Exception as e:
+            print(f"[{cfg.ts()}] [WARNING] 注册资料页预热失败，将直接提交账户资料: {e}")
 
         user_info = generate_random_user_info()
         print(f"[{cfg.ts()}] [INFO] 初始化账户信息 "
@@ -740,43 +894,71 @@ def run(proxy: Optional[str]) -> tuple:
             s_reg,
             "https://auth.openai.com/api/accounts/create_account",
             headers=_oai_headers(did, {
-                "Referer":      "https://auth.openai.com/about-you",
+                "Referer":      about_you_referer,
                 "content-type": "application/json",
             }),
-            json_body=user_info, proxies=proxies,
+            data=_compact_json(user_info), proxies=proxies,
         )
 
         if create_account_resp.status_code != 200:
             _log_registration_http_failure("账户创建", create_account_resp)
             return None, None
 
+        create_account_json = _json_dict(create_account_resp)
+
         auth_cookie = s_reg.cookies.get("oai-client-auth-session") or ""
         workspaces  = _parse_workspace_from_auth_cookie(auth_cookie)
         has_workspace = bool(workspaces)
 
-        wait_time = random.randint(cfg.LOGIN_DELAY_MIN, cfg.LOGIN_DELAY_MAX)
-        print(f"[{cfg.ts()}] [INFO] 注册通过，等待 {wait_time} 秒后发起静默登录...")
-        time.sleep(wait_time)
+        print(f"[{cfg.ts()}] [INFO] 基础信息建立完毕，优先沿当前注册会话提取最终凭据...")
+        direct_trace = []
+        direct_current_url = ""
+        post_create_url = _extract_next_url(create_account_json)
 
-
-        if has_workspace:
-            print(f"[{cfg.ts()}] [SUCCESS] 正在提取最终凭据...")
-            oauth_log = generate_oauth_url()
-            direct_trace = []
-            _, final_url = _follow_redirect_chain_local(
-                s_reg, oauth_log.auth_url, proxies, trace=direct_trace, stage="direct_oauth"
+        if post_create_url:
+            _, direct_current_url = _follow_redirect_chain_local(
+                s_reg,
+                post_create_url,
+                proxies,
+                trace=direct_trace,
+                stage="post_create_account",
             )
-            if "code=" in final_url and "state=" in final_url:
+            if "code=" in direct_current_url and "state=" in direct_current_url:
+                print(f"[{cfg.ts()}] [SUCCESS] 当前注册会话已直接命中授权回调。")
                 return submit_callback_url(
-                    callback_url   = final_url,
-                    expected_state = oauth_log.state,
-                    code_verifier  = oauth_log.code_verifier,
-                    proxies        = proxies,
+                    callback_url=direct_current_url,
+                    expected_state=oauth_reg.state,
+                    code_verifier=oauth_reg.code_verifier,
+                    redirect_uri=oauth_reg.redirect_uri,
+                    proxies=proxies,
                 ), password
-            print(f"[{cfg.ts()}] [WARNING] 直接提取最终凭据未命中授权回调，转入静风控重登录。")
-            for idx, item in enumerate(direct_trace[-5:], 1):
-                print(f"[{cfg.ts()}] [DEBUG] 直接提凭据轨迹[{idx}]: {item}")
 
+        if has_workspace or direct_current_url.endswith("/consent") or direct_current_url.endswith("/workspace"):
+            token_json = _select_workspace_and_submit(
+                s_reg,
+                oauth_reg,
+                proxies=proxies,
+                referer=direct_current_url or post_create_url or about_you_referer,
+                trace=direct_trace,
+                stage="direct_workspace_select",
+            )
+            if token_json:
+                print(f"[{cfg.ts()}] [SUCCESS] 当前注册会话提取最终凭据成功。")
+                return token_json, password
+
+        if direct_current_url.endswith("/add-phone"):
+            print(
+                f"[{cfg.ts()}] [WARNING] 当前注册会话已命中手机号验证页，"
+                f"继续静风控重登录大概率仍会被拦截，仅作为最后兜底尝试。"
+            )
+        elif direct_trace:
+            print(f"[{cfg.ts()}] [WARNING] 当前注册会话未直接拿到最终凭据，转入静风控重登录兜底。")
+            for idx, item in enumerate(direct_trace[-5:], 1):
+                print(f"[{cfg.ts()}] [DEBUG] 当前会话提凭据轨迹[{idx}]: {item}")
+
+        wait_time = random.randint(cfg.LOGIN_DELAY_MIN, cfg.LOGIN_DELAY_MAX)
+        print(f"[{cfg.ts()}] [INFO] 等待 {wait_time} 秒后执行静风控重登录兜底...")
+        time.sleep(wait_time)
 
         print(f"[{cfg.ts()}] [INFO] 基础信息建立完毕，执行静风控重登录...")
         s_log     = requests.Session(proxies=proxies, impersonate="chrome110")
@@ -808,7 +990,7 @@ def run(proxy: Optional[str]) -> tuple:
                     "content-type":          "application/json",
                 },
             ),
-            json_body={"username": {"value": email, "kind": "email"}},
+            data=_compact_json({"username": {"value": email, "kind": "email"}}),
             proxies=proxies, allow_redirects=False,
         )
         if login_start_resp.status_code != 200:
@@ -823,7 +1005,7 @@ def run(proxy: Optional[str]) -> tuple:
             return None, None
 
         pwd_page_url = str(
-            (login_start_resp.json() if login_start_resp.status_code == 200 else {})
+            (_json_dict(login_start_resp) if login_start_resp.status_code == 200 else {})
             .get("continue_url") or ""
         ).strip()
         if not pwd_page_url:
@@ -851,7 +1033,7 @@ def run(proxy: Optional[str]) -> tuple:
                     "content-type":          "application/json",
                 },
             ),
-            json_body={"password": password}, proxies=proxies,
+            data=_compact_json({"password": password}), proxies=proxies,
         )
         if pwd_login_resp.status_code != 200:
             _log_registration_http_failure("密码验证", pwd_login_resp)
@@ -864,7 +1046,7 @@ def run(proxy: Optional[str]) -> tuple:
             )
             return None, None
 
-        pwd_json = pwd_login_resp.json() if pwd_login_resp.status_code == 200 else {}
+        pwd_json = _json_dict(pwd_login_resp) if pwd_login_resp.status_code == 200 else {}
         next_url = _extract_next_url(pwd_json)
         if not next_url:
             _log_oauth_chain_failure(
@@ -892,7 +1074,7 @@ def run(proxy: Optional[str]) -> tuple:
                                 s_log.cookies.get("oai-did") or "",
                                 {"Referer": current_url, "content-type": "application/json"},
                             ),
-                            json_body={}, proxies=proxies, timeout=15,
+                            data=_compact_json({}), proxies=proxies, timeout=15,
                         )
                         time.sleep(2)
                     except Exception as e:
@@ -918,7 +1100,7 @@ def run(proxy: Optional[str]) -> tuple:
                         "content-type":          "application/json",
                     },
                 ),
-                json_body={"code": code2}, proxies=proxies,
+                data=_compact_json({"code": code2}), proxies=proxies,
             )
             if code2_resp.status_code != 200:
                 _log_registration_http_failure("二次安全验证 OTP 校验", code2_resp)
@@ -931,7 +1113,7 @@ def run(proxy: Optional[str]) -> tuple:
                 )
                 return None, None
 
-            next_url = str(code2_resp.json().get("continue_url") or "").strip()
+            next_url = str(_json_dict(code2_resp).get("continue_url") or "").strip()
             if not next_url:
                 _log_oauth_chain_failure(
                     "missing_next_url_after_secondary_otp",
@@ -979,7 +1161,7 @@ def run(proxy: Optional[str]) -> tuple:
                         s_log.cookies.get("oai-did") or "",
                         {"Referer": current_url, "content-type": "application/json"},
                     ),
-                    json_body={"workspace_id": str(workspaces2[0].get("id"))},
+                    data=_compact_json({"workspace_id": str(workspaces2[0].get("id"))}),
                     proxies=proxies,
                 )
                 if select_resp.status_code != 200:
@@ -993,7 +1175,7 @@ def run(proxy: Optional[str]) -> tuple:
                     )
                     return None, None
                 final_url = (
-                    _extract_next_url(select_resp.json())
+                    _extract_next_url(_json_dict(select_resp))
                     if select_resp.status_code == 200 else ""
                 )
                 if not final_url:
