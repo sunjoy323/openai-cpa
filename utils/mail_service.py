@@ -10,6 +10,7 @@ from email import message_from_string
 from email.header import decode_header, make_header
 from email.message import Message
 from email.policy import default as email_policy
+from email.utils import getaddresses, parsedate_to_datetime
 from html import unescape
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -263,6 +264,34 @@ def _extract_body_from_message(message: Message) -> str:
     return unescape("\n".join(p for p in parts if p).strip())
 
 
+def _message_timestamp(message: Message) -> Optional[float]:
+    raw_date = message.get("Date")
+    if not raw_date:
+        return None
+    try:
+        return parsedate_to_datetime(raw_date).timestamp()
+    except Exception:
+        return None
+
+
+def _recipient_matches_imap_message(message: Message, email_addr: str, body: str) -> bool:
+    email_lower = (email_addr or "").lower()
+    if not email_lower:
+        return False
+
+    header_values = []
+    for header_name in ("To", "Cc", "Delivered-To", "X-Original-To", "X-Forwarded-To"):
+        for header_value in message.get_all(header_name, []):
+            header_values.append(_decode_mime_header(str(header_value)))
+
+    addresses = [addr.lower() for _, addr in getaddresses(header_values) if addr]
+    if any(email_lower == addr or email_lower in addr for addr in addresses):
+        return True
+    if any(email_lower in value.lower() for value in header_values):
+        return True
+    return email_lower in (body or "").lower()
+
+
 def _extract_mail_fields(mail: dict) -> dict:
     sender = str(
         mail.get("source") or mail.get("from") or
@@ -423,6 +452,7 @@ def get_oai_code(
     mail_proxies = proxies if cfg.USE_PROXY_FOR_EMAIL else None
     base_url = cfg.GPTMAIL_BASE.rstrip("/")
     mode = cfg.EMAIL_API_MODE
+    imap_wait_started_at = time.time()
 
     print(f"\n[{cfg.ts()}] [INFO] 等待接收验证码 ({mask_email(email)}) ", end="", flush=True)
 
@@ -508,7 +538,6 @@ def get_oai_code(
 
                 folders = ["INBOX", "Junk", '"Junk Email"', "Spam",
                            '"[Gmail]/Spam"', '"垃圾邮件"']
-                found = False
                 for folder in folders:
                     try:
                         mail_conn.noop()
@@ -519,57 +548,75 @@ def get_oai_code(
                                 mail_conn = None
                                 break
                             continue
-                        status, messages = mail_conn.search(
-                            None, f'(UNSEEN FROM "openai.com" TO "{email}")'
-                        )
-                        if status != "OK" or not messages[0]:
+
+                        status, messages = mail_conn.uid("search", None, "ALL")
+                        fetch_by_uid = True
+                        if status != "OK" or not messages:
+                            status, messages = mail_conn.search(None, "ALL")
+                            fetch_by_uid = False
+                        if status != "OK" or not messages or not messages[0]:
                             continue
-                        for mail_id in reversed(messages[0].split()):
-                            if mail_id in processed_mail_ids:
+
+                        message_ids = messages[0].split()
+                        for mail_id in reversed(message_ids[-50:]):
+                            msg_key = f"{folder}:{mail_id.decode('utf-8', 'ignore') if isinstance(mail_id, bytes) else str(mail_id)}"
+                            if msg_key in processed_mail_ids:
                                 continue
-                            res, data = mail_conn.fetch(mail_id, "(RFC822)")
+
+                            if fetch_by_uid:
+                                res, data = mail_conn.uid("fetch", mail_id, "(RFC822)")
+                            else:
+                                res, data = mail_conn.fetch(mail_id, "(RFC822)")
+                            if res != "OK" or not data:
+                                processed_mail_ids.add(msg_key)
+                                continue
+
+                            raw_message = None
                             for resp_part in data:
-                                if not isinstance(resp_part, tuple):
-                                    continue
-                                import email as email_lib
-                                msg = email_lib.message_from_bytes(resp_part[1])
-                                subject = str(msg.get("Subject", ""))
-                                if "=?UTF-8?" in subject:
-                                    from email.header import decode_header as _dh
-                                    dh = _dh(subject)
-                                    subject = "".join(
-                                        str(t[0].decode(t[1] or "utf-8")
-                                            if isinstance(t[0], bytes) else t[0])
-                                        for t in dh
-                                    )
-                                content = ""
-                                if msg.is_multipart():
-                                    for part in msg.walk():
-                                        if part.get_content_type() == "text/plain":
-                                            try:
-                                                content += part.get_payload(decode=True).decode("utf-8", "ignore")
-                                            except Exception:
-                                                pass
-                                else:
-                                    content = msg.get_payload(decode=True).decode("utf-8", "ignore")
-                                to_h  = str(msg.get("To", "")).lower()
-                                del_h = str(msg.get("Delivered-To", "")).lower()
-                                tgt   = email.lower()
-                                if tgt not in to_h and tgt not in del_h and tgt not in content.lower():
-                                    processed_mail_ids.add(mail_id)
-                                    continue
-                                code = _extract_otp_code(f"{subject}\n{content}")
-                                if code:
-                                    processed_mail_ids.add(mail_id)
-                                    print(f"\n[{cfg.ts()}] [SUCCESS] 验证码: {code}")
-                                    try:
-                                        mail_conn.logout()
-                                    except Exception:
-                                        pass
-                                    return code
-                                processed_mail_ids.add(mail_id)
-                        found = True
-                        break
+                                if isinstance(resp_part, tuple) and len(resp_part) >= 2:
+                                    raw_message = resp_part[1]
+                                    break
+                            if not raw_message:
+                                processed_mail_ids.add(msg_key)
+                                continue
+
+                            import email as email_lib
+                            msg = email_lib.message_from_bytes(raw_message)
+                            msg_ts = _message_timestamp(msg)
+                            if msg_ts is not None and msg_ts < (imap_wait_started_at - 30):
+                                processed_mail_ids.add(msg_key)
+                                continue
+
+                            sender = _decode_mime_header(str(msg.get("From", "")))
+                            subject = _decode_mime_header(str(msg.get("Subject", "")))
+                            content = _extract_body_from_message(msg)
+                            full_content = f"{sender}\n{subject}\n{content}".strip()
+
+                            if "openai" not in full_content.lower():
+                                processed_mail_ids.add(msg_key)
+                                continue
+                            if not _recipient_matches_imap_message(msg, email, content):
+                                processed_mail_ids.add(msg_key)
+                                continue
+
+                            code = _extract_otp_code(full_content)
+                            if code:
+                                processed_mail_ids.add(msg_key)
+                                print(f"\n[{cfg.ts()}] [SUCCESS] 验证码: {code} (folder={folder})")
+                                try:
+                                    if fetch_by_uid:
+                                        mail_conn.uid("store", mail_id, "+FLAGS", r"(\Deleted)")
+                                    else:
+                                        mail_conn.store(mail_id, "+FLAGS", r"(\Deleted)")
+                                    mail_conn.expunge()
+                                except Exception:
+                                    pass
+                                try:
+                                    mail_conn.logout()
+                                except Exception:
+                                    pass
+                                return code
+                            processed_mail_ids.add(msg_key)
                     except imaplib.IMAP4.abort:
                         print(f"\n[{cfg.ts()}] [WARNING] IMAP 连接断开，将在下次循环重连...")
                         mail_conn = None
@@ -577,7 +624,7 @@ def get_oai_code(
                     except Exception as e:
                         if "Spam" in folder:
                             print(f"\n[{cfg.ts()}] [DEBUG] 访问垃圾箱失败: {e}")
-                if not found:
+                if mail_conn is not None:
                     print(".", end="", flush=True)
 
             elif mode == "freemail":
