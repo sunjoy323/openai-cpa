@@ -574,9 +574,17 @@ async def stream_logs(request: Request, token: str = Query(None)):
     if token not in VALID_TOKENS:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+    def iter_log_lines(message):
+        lines = str(message).splitlines() or [str(message)]
+        for line in lines:
+            text = line.strip()
+            if text:
+                yield text
+
     async def log_generator():
         for old_msg in log_history:
-            yield f"data: {old_msg}\n\n"
+            for line in iter_log_lines(old_msg):
+                yield f"data: {line}\n\n"
         
         try:
             while True:
@@ -585,8 +593,9 @@ async def stream_logs(request: Request, token: str = Query(None)):
                     
                 if not core_engine.log_queue.empty():
                     msg = core_engine.log_queue.get_nowait()
-                    log_history.append(msg)
-                    yield f"data: {msg}\n\n"
+                    for line in iter_log_lines(msg):
+                        log_history.append(line)
+                        yield f"data: {line}\n\n"
                 else:
                     await asyncio.sleep(0.1)
         except asyncio.CancelledError:
