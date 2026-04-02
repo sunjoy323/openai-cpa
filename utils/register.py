@@ -239,6 +239,25 @@ def _response_debug_summary(resp: Any) -> str:
     return ", ".join(parts)
 
 
+def _response_error_fields(resp: Any) -> Dict[str, Any]:
+    if resp is None:
+        return {}
+    try:
+        data = resp.json()
+    except Exception:
+        return {}
+
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, dict):
+            result = dict(err)
+            if (data.get("page") or {}).get("type"):
+                result["page_type"] = (data.get("page") or {}).get("type")
+            return result
+        return data
+    return {}
+
+
 def _registration_failure_hint(stage: str, status_code: Any) -> str:
     try:
         code = int(status_code)
@@ -265,7 +284,15 @@ def _registration_failure_hint(stage: str, status_code: Any) -> str:
 def _log_registration_http_failure(stage: str, resp: Any) -> None:
     summary = _response_debug_summary(resp)
     status = getattr(resp, "status_code", "unknown")
+    err_fields = _response_error_fields(resp)
+    err_code = str(err_fields.get("code") or "").strip().lower()
     hint = _registration_failure_hint(stage, status)
+    if err_code == "registration_disallowed":
+        hint = (
+            f"{stage} 被服务端明确拒绝，错误码=registration_disallowed。"
+            f"这通常更像注册策略拦截，常见原因是邮箱域名信誉、代理/IP 风险、"
+            f"批量行为痕迹或账号环境命中风控，而不是单纯代码参数格式问题。"
+        )
     print(f"[{cfg.ts()}] [ERROR] {stage}失败: {summary}")
     print(f"[{cfg.ts()}] [ERROR] {hint}")
 
@@ -926,6 +953,20 @@ def run(proxy: Optional[str]) -> tuple:
                 expected_state = oauth_log.state,
                 proxies        = proxies,
             ), password
+
+        if current_url.endswith("/add-phone"):
+            _log_oauth_chain_failure(
+                "phone_verification_required",
+                current_url=current_url,
+                resp=resp,
+                trace=oauth_trace,
+                note=(
+                    "当前授权流已命中手机号验证页。说明这个账号/会话被要求先完成手机验证，"
+                    "脚本目前不支持自动过手机号验证。常见诱因是代理/IP 风险、账号环境命中风控，"
+                    "或该邮箱注册出来的账号被策略要求补充手机号。"
+                ),
+            )
+            return None, None
 
         if current_url.endswith("/consent") or current_url.endswith("/workspace"):
             auth_cookie2 = s_log.cookies.get("oai-client-auth-session") or ""
