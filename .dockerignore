@@ -1,6 +1,7 @@
 .git
 .gitignore
 .github/
+.serena/
 
 __pycache__/
 *.pyc
@@ -20,4 +21,7 @@ data/
 
 docker-compose.yaml
 docker-compose.yml
+docker-compose.local.yml
 Dockerfile
+run-compose.bat
+run-compose.sh

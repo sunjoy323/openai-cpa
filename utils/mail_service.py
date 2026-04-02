@@ -361,6 +361,10 @@ def _imap_quote(value: str) -> str:
 
 def _send_imap_id_if_needed(mail_conn):
     if not _should_send_imap_id():
+        print(
+            f"\n[{cfg.ts()}] [INFO] 当前 IMAP 服务器无需发送 ID 标识: "
+            f"server={cfg.IMAP_SERVER}, user={mask_email(str(cfg.IMAP_USER))}"
+        )
         return
 
     support_email = cfg.IMAP_USER if "@" in str(cfg.IMAP_USER) else "noreply@example.com"
@@ -390,9 +394,14 @@ def _send_imap_id_if_needed(mail_conn):
 
 def _create_and_login_imap_conn():
     """建立并登录 IMAP 连接，必要时补发 ID 标识。"""
+    print(
+        f"\n[{cfg.ts()}] [INFO] 正在连接 IMAP 服务器: "
+        f"{cfg.IMAP_SERVER}:{cfg.IMAP_PORT} ({mask_email(str(cfg.IMAP_USER))})"
+    )
     mail_conn = _create_imap_conn()
     try:
         mail_conn.login(cfg.IMAP_USER, cfg.IMAP_PASS.replace(" ", ""))
+        print(f"\n[{cfg.ts()}] [INFO] IMAP 登录成功，开始检查 ID 标识要求。")
         _send_imap_id_if_needed(mail_conn)
         return mail_conn
     except Exception:
@@ -422,6 +431,10 @@ def get_oai_code(
 
     mail_conn = None
     if mode == "imap":
+        print(
+            f"\n[{cfg.ts()}] [INFO] 当前邮箱接码模式: IMAP 直连，"
+            f"网易系 ID 特殊处理={'开启' if _should_send_imap_id() else '跳过'}。"
+        )
         try:
             mail_conn = _create_and_login_imap_conn()
         except Exception as e:
