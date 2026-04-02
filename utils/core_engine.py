@@ -543,8 +543,21 @@ def auto_heal_subdomain(failed_domain: str):
     cf_cfg = getattr(cfg, '_c', {})
     api_email = cf_cfg.get("cf_api_email")
     api_key = cf_cfg.get("cf_api_key")
-    main_dom = failed_domain.split(".", 1)[1]
-
+    root_str = cf_cfg.get("mail_domains", "")
+    root_domains = [d.strip() for d in root_str.split(",") if d.strip()]
+    
+    main_dom = None
+    for root in root_domains:
+        if failed_domain.endswith(root):
+            main_dom = root
+            break
+    if not main_dom:
+        print(f"[{ts()}] [ERROR] 无法识别 {failed_domain} 所属的主域，请检查配置！")
+        return
+        
+        
+    level = cf_cfg.get("sub_domain_level", 1)
+    
     try:
         from cloudflare import Cloudflare
         cf = Cloudflare(api_email=api_email, api_key=api_key)
@@ -559,12 +572,15 @@ def auto_heal_subdomain(failed_domain: str):
             print(f"[{ts()}] [自愈] 已成功注销失效域名: {mask_email(failed_domain)}")
     except Exception as e:
         print(f"[{ts()}] [ERROR] 销毁失效域名异常: {e}")
+        return
 
     refill_num = int(getattr(cfg, 'SUB_DOMAIN_REFILL_COUNT', 1))
     new_domains = []
     for _ in range(refill_num):
-        prefix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-        new_domains.append(f"{prefix}.{main_dom}")
+        random_parts = []
+        for _ in range(level):
+            random_parts.append(''.join(random.choices(string.ascii_lowercase + string.digits, k=8)))
+        new_domains.append(".".join(random_parts) + f".{main_dom}")
 
     with _heal_lock:
         current_list = [d.strip() for d in cfg.SUB_DOMAINS_LIST.split(",") if d.strip()]
@@ -613,6 +629,7 @@ def auto_heal_subdomain(failed_domain: str):
                     
         except Exception as e:
             print(f"[{ts()}] [WARNING] 状态监控请求异常 (重试中): {e}")
+            if retry_count > 10: break
             
         time.sleep(15)
 
