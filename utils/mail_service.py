@@ -583,7 +583,6 @@ def get_oai_code(
                         for mail_id in reversed(scan_ids):
                             msg_key = f"{folder}:{mail_id.decode('utf-8', 'ignore') if isinstance(mail_id, bytes) else str(mail_id)}"
                             if msg_key in processed_mail_ids:
-                                print(f"\n[{cfg.ts()}] [DEBUG] 跳过已处理邮件: {msg_key}")
                                 continue
 
                             if fetch_by_uid:
@@ -609,7 +608,6 @@ def get_oai_code(
                             msg = email_lib.message_from_bytes(raw_message)
                             msg_ts = _message_timestamp(msg)
                             if msg_ts is not None and msg_ts < (imap_wait_started_at - 30):
-                                print(f"\n[{cfg.ts()}] [DEBUG] 邮件时间过早，跳过: {msg_key}, ts={msg_ts:.0f}")
                                 processed_mail_ids.add(msg_key)
                                 continue
 

@@ -7,6 +7,7 @@ import re
 import secrets
 import string
 import time
+import traceback
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime
@@ -191,6 +192,123 @@ def _post_with_retry(
         raise last_error
     raise RuntimeError("Request failed without exception")
 
+
+def _short_text(value: Any, limit: int = 300) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def _response_debug_summary(resp: Any) -> str:
+    if resp is None:
+        return "response=<none>"
+
+    status = getattr(resp, "status_code", "unknown")
+    headers = getattr(resp, "headers", {}) or {}
+    content_type = _short_text(headers.get("content-type", ""))
+    location = _short_text(headers.get("location", ""))
+
+    payload = ""
+    try:
+        data = resp.json()
+        if isinstance(data, dict):
+            interesting = {
+                key: data.get(key) for key in (
+                    "error", "error_description", "message", "detail",
+                    "code", "type", "reason", "continue_url"
+                ) if data.get(key)
+            }
+            page = data.get("page") or {}
+            if isinstance(page, dict) and page.get("type"):
+                interesting["page_type"] = page.get("type")
+            payload = json.dumps(interesting or data, ensure_ascii=False)
+        else:
+            payload = json.dumps(data, ensure_ascii=False)
+    except Exception:
+        payload = getattr(resp, "text", "")
+
+    payload = _short_text(payload, 500)
+    parts = [f"HTTP {status}"]
+    if content_type:
+        parts.append(f"content-type={content_type}")
+    if location:
+        parts.append(f"location={location}")
+    if payload:
+        parts.append(f"body={payload}")
+    return ", ".join(parts)
+
+
+def _registration_failure_hint(stage: str, status_code: Any) -> str:
+    try:
+        code = int(status_code)
+    except Exception:
+        code = None
+
+    if code == 400:
+        return f"{stage} 可能是请求参数、会话状态或页面流程字段不符合预期，不一定是域名问题。"
+    if code == 401:
+        return f"{stage} 可能是认证状态失效，检查挑战链路、Cookie 和会话连续性。"
+    if code == 403:
+        return f"{stage} 更像是风控拦截，域名、代理、指纹或行为轨迹都可能触发。"
+    if code == 409:
+        return f"{stage} 可能是账号状态冲突或流程重复提交。"
+    if code == 422:
+        return f"{stage} 可能是资料页字段校验未通过。"
+    if code == 429:
+        return f"{stage} 可能是频率限制或风控限流。"
+    if code and code >= 500:
+        return f"{stage} 可能是服务端异常，未必和域名有关。"
+    return f"{stage} 失败，域名只是可能原因之一，还可能是风控、资料校验或会话链路异常。"
+
+
+def _log_registration_http_failure(stage: str, resp: Any) -> None:
+    summary = _response_debug_summary(resp)
+    status = getattr(resp, "status_code", "unknown")
+    hint = _registration_failure_hint(stage, status)
+    print(f"[{cfg.ts()}] [ERROR] {stage}失败: {summary}")
+    print(f"[{cfg.ts()}] [ERROR] {hint}")
+
+
+def _record_redirect_trace(
+    trace: Optional[list],
+    stage: str,
+    url: str,
+    resp: Any = None,
+    note: str = "",
+) -> None:
+    if trace is None:
+        return
+    parts = [f"stage={stage}", f"url={_short_text(url, 240)}"]
+    if resp is not None:
+        parts.append(_response_debug_summary(resp))
+    if note:
+        parts.append(f"note={_short_text(note, 240)}")
+    trace.append(" | ".join(parts))
+
+
+def _log_oauth_chain_failure(
+    stage: str,
+    *,
+    current_url: str = "",
+    next_url: str = "",
+    resp: Any = None,
+    trace: Optional[list] = None,
+    note: str = "",
+) -> None:
+    print(f"[{cfg.ts()}] [ERROR] OAuth 授权链路失败，阶段={stage}")
+    if current_url:
+        print(f"[{cfg.ts()}] [ERROR] OAuth 当前 URL: {_short_text(current_url, 500)}")
+    if next_url:
+        print(f"[{cfg.ts()}] [ERROR] OAuth 下一跳 URL: {_short_text(next_url, 500)}")
+    if note:
+        print(f"[{cfg.ts()}] [ERROR] OAuth 说明: {_short_text(note, 500)}")
+    if resp is not None:
+        print(f"[{cfg.ts()}] [ERROR] OAuth 原始响应: {_response_debug_summary(resp)}")
+    if trace:
+        for idx, item in enumerate(trace[-8:], 1):
+            print(f"[{cfg.ts()}] [DEBUG] OAuth 跳转轨迹[{idx}]: {item}")
+
 def _oai_headers(did: str, extra: dict = None) -> dict:
     h = {
         "accept": "application/json",
@@ -244,11 +362,16 @@ def _follow_redirect_chain_local(
     start_url: str,
     proxies: Any = None,
     max_redirects: int = 12,
+    trace: Optional[list] = None,
+    stage: str = "",
 ) -> Tuple[Any, str]:
     """手动跟随 30x 重定向；若 Location 含 code+state 则直接返回。"""
     current_url = start_url
     response    = None
-    for _ in range(max_redirects):
+    if not current_url:
+        _record_redirect_trace(trace, stage or "redirect_start", current_url, note="empty start_url")
+        return None, current_url
+    for idx in range(max_redirects):
         try:
             response = session.get(
                 current_url,
@@ -257,16 +380,37 @@ def _follow_redirect_chain_local(
                 verify=_ssl_verify(),
                 timeout=15,
             )
+            _record_redirect_trace(trace, stage or f"redirect_{idx+1}", current_url, response)
             if response.status_code not in (301, 302, 303, 307, 308):
                 return response, current_url
             loc = response.headers.get("Location", "")
             if not loc:
+                _record_redirect_trace(
+                    trace,
+                    stage or f"redirect_{idx+1}",
+                    current_url,
+                    response,
+                    note="redirect response missing Location header",
+                )
                 return response, current_url
             current_url = urllib.parse.urljoin(current_url, loc)
             if "code=" in current_url and "state=" in current_url:
+                _record_redirect_trace(
+                    trace,
+                    stage or f"redirect_{idx+1}",
+                    current_url,
+                    note="authorization callback detected",
+                )
                 return None, current_url
-        except Exception:
+        except Exception as e:
+            _record_redirect_trace(
+                trace,
+                stage or f"redirect_{idx+1}",
+                current_url,
+                note=f"exception={e}",
+            )
             return None, current_url
+    _record_redirect_trace(trace, stage or "redirect_end", current_url, response, note="max_redirects reached")
     return response, current_url
 
 
@@ -476,7 +620,7 @@ def run(proxy: Optional[str]) -> tuple:
             print(f"[{cfg.ts()}] [WARNING] 注册请求触发 403 拦截，稍作等待后重试...")
             return "retry_403", None
         if signup_resp.status_code != 200:
-            print(f"[{cfg.ts()}] [ERROR] 注册环节异常,请更换域名")
+            _log_registration_http_failure("注册环节", signup_resp)
             return None, None
 
         sentinel_reg = _get_sentinel_token(s_reg, "authorize_continue", proxies)
@@ -494,7 +638,7 @@ def run(proxy: Optional[str]) -> tuple:
         )
 
         if pwd_resp.status_code != 200:
-            print(f"[{cfg.ts()}] [ERROR] 注册环节异常,请更换域名")
+            _log_registration_http_failure("密码提交环节", pwd_resp)
             return None, None
 
         try:
@@ -576,7 +720,7 @@ def run(proxy: Optional[str]) -> tuple:
         )
 
         if create_account_resp.status_code != 200:
-            print(f"[{cfg.ts()}] [ERROR] 账户创建受阻: 请更换域名")
+            _log_registration_http_failure("账户创建", create_account_resp)
             return None, None
 
         auth_cookie = s_reg.cookies.get("oai-client-auth-session") or ""
@@ -591,7 +735,10 @@ def run(proxy: Optional[str]) -> tuple:
         if has_workspace:
             print(f"[{cfg.ts()}] [SUCCESS] 正在提取最终凭据...")
             oauth_log = generate_oauth_url()
-            _, final_url = _follow_redirect_chain_local(s_reg, oauth_log.auth_url, proxies)
+            direct_trace = []
+            _, final_url = _follow_redirect_chain_local(
+                s_reg, oauth_log.auth_url, proxies, trace=direct_trace, stage="direct_oauth"
+            )
             if "code=" in final_url and "state=" in final_url:
                 return submit_callback_url(
                     callback_url   = final_url,
@@ -599,13 +746,19 @@ def run(proxy: Optional[str]) -> tuple:
                     code_verifier  = oauth_log.code_verifier,
                     proxies        = proxies,
                 ), password
+            print(f"[{cfg.ts()}] [WARNING] 直接提取最终凭据未命中授权回调，转入静风控重登录。")
+            for idx, item in enumerate(direct_trace[-5:], 1):
+                print(f"[{cfg.ts()}] [DEBUG] 直接提凭据轨迹[{idx}]: {item}")
 
 
         print(f"[{cfg.ts()}] [INFO] 基础信息建立完毕，执行静风控重登录...")
         s_log     = requests.Session(proxies=proxies, impersonate="chrome110")
         oauth_log = generate_oauth_url()
+        oauth_trace = []
 
-        resp, current_url = _follow_redirect_chain_local(s_log, oauth_log.auth_url, proxies)
+        resp, current_url = _follow_redirect_chain_local(
+            s_log, oauth_log.auth_url, proxies, trace=oauth_trace, stage="oauth_start"
+        )
         if "code=" in current_url and "state=" in current_url:
             return submit_callback_url(
                 callback_url   = current_url,
@@ -631,12 +784,33 @@ def run(proxy: Optional[str]) -> tuple:
             json_body={"username": {"value": email, "kind": "email"}},
             proxies=proxies, allow_redirects=False,
         )
+        if login_start_resp.status_code != 200:
+            _log_registration_http_failure("OAuth 登录起始授权", login_start_resp)
+            _log_oauth_chain_failure(
+                "authorize_continue",
+                current_url=current_url,
+                resp=login_start_resp,
+                trace=oauth_trace,
+                note="authorize/continue 未返回 200，无法进入密码页。",
+            )
+            return None, None
 
         pwd_page_url = str(
             (login_start_resp.json() if login_start_resp.status_code == 200 else {})
             .get("continue_url") or ""
         ).strip()
-        resp, current_url = _follow_redirect_chain_local(s_log, pwd_page_url, proxies)
+        if not pwd_page_url:
+            _log_oauth_chain_failure(
+                "missing_password_page_url",
+                current_url=current_url,
+                resp=login_start_resp,
+                trace=oauth_trace,
+                note="authorize/continue 返回中没有 continue_url。",
+            )
+            return None, None
+        resp, current_url = _follow_redirect_chain_local(
+            s_log, pwd_page_url, proxies, trace=oauth_trace, stage="password_page"
+        )
 
         sentinel_pwd = _get_sentinel_token(s_log, "password_verify", proxies)
         pwd_login_resp = _post_with_retry(
@@ -652,10 +826,31 @@ def run(proxy: Optional[str]) -> tuple:
             ),
             json_body={"password": password}, proxies=proxies,
         )
+        if pwd_login_resp.status_code != 200:
+            _log_registration_http_failure("密码验证", pwd_login_resp)
+            _log_oauth_chain_failure(
+                "password_verify",
+                current_url=current_url,
+                resp=pwd_login_resp,
+                trace=oauth_trace,
+                note="password/verify 未返回 200。",
+            )
+            return None, None
 
         pwd_json = pwd_login_resp.json() if pwd_login_resp.status_code == 200 else {}
         next_url = _extract_next_url(pwd_json)
-        resp, current_url = _follow_redirect_chain_local(s_log, next_url, proxies)
+        if not next_url:
+            _log_oauth_chain_failure(
+                "missing_next_url_after_password_verify",
+                current_url=current_url,
+                resp=pwd_login_resp,
+                trace=oauth_trace,
+                note="password/verify 响应里没有 continue_url，也无法从 page.type 推导下一跳。",
+            )
+            return None, None
+        resp, current_url = _follow_redirect_chain_local(
+            s_log, next_url, proxies, trace=oauth_trace, stage="post_password_verify"
+        )
 
         if current_url.endswith("/email-verification"):
             code2 = ""
@@ -699,11 +894,29 @@ def run(proxy: Optional[str]) -> tuple:
                 json_body={"code": code2}, proxies=proxies,
             )
             if code2_resp.status_code != 200:
-                print(f"[{cfg.ts()}] [ERROR] 二次安全验证 OTP 校验失败: {code2_resp.text}")
+                _log_registration_http_failure("二次安全验证 OTP 校验", code2_resp)
+                _log_oauth_chain_failure(
+                    "secondary_email_otp_validate",
+                    current_url=current_url,
+                    resp=code2_resp,
+                    trace=oauth_trace,
+                    note="二次邮箱验证未通过。",
+                )
                 return None, None
 
             next_url = str(code2_resp.json().get("continue_url") or "").strip()
-            resp, current_url = _follow_redirect_chain_local(s_log, next_url, proxies)
+            if not next_url:
+                _log_oauth_chain_failure(
+                    "missing_next_url_after_secondary_otp",
+                    current_url=current_url,
+                    resp=code2_resp,
+                    trace=oauth_trace,
+                    note="二次 OTP 校验成功，但响应里没有 continue_url。",
+                )
+                return None, None
+            resp, current_url = _follow_redirect_chain_local(
+                s_log, next_url, proxies, trace=oauth_trace, stage="post_secondary_otp"
+            )
 
         if "code=" in current_url and "state=" in current_url:
             return submit_callback_url(
@@ -728,11 +941,32 @@ def run(proxy: Optional[str]) -> tuple:
                     json_body={"workspace_id": str(workspaces2[0].get("id"))},
                     proxies=proxies,
                 )
+                if select_resp.status_code != 200:
+                    _log_registration_http_failure("Workspace 选择", select_resp)
+                    _log_oauth_chain_failure(
+                        "workspace_select",
+                        current_url=current_url,
+                        resp=select_resp,
+                        trace=oauth_trace,
+                        note="workspace/select 未返回 200。",
+                    )
+                    return None, None
                 final_url = (
                     _extract_next_url(select_resp.json())
                     if select_resp.status_code == 200 else ""
                 )
-                _, final_loc = _follow_redirect_chain_local(s_log, final_url, proxies)
+                if not final_url:
+                    _log_oauth_chain_failure(
+                        "missing_final_url_after_workspace_select",
+                        current_url=current_url,
+                        resp=select_resp,
+                        trace=oauth_trace,
+                        note="workspace/select 成功，但没有解析到下一跳 URL。",
+                    )
+                    return None, None
+                _, final_loc = _follow_redirect_chain_local(
+                    s_log, final_url, proxies, trace=oauth_trace, stage="post_workspace_select"
+                )
                 if "code=" in final_loc:
                     return submit_callback_url(
                         callback_url   = final_loc,
@@ -740,12 +974,28 @@ def run(proxy: Optional[str]) -> tuple:
                         code_verifier  = oauth_log.code_verifier,
                         proxies        = proxies,
                     ), password
+                _log_oauth_chain_failure(
+                    "workspace_select_no_callback",
+                    current_url=final_loc,
+                    next_url=final_url,
+                    resp=select_resp,
+                    trace=oauth_trace,
+                    note="workspace/select 之后仍未拿到 code/state。",
+                )
+                return None, None
 
-        print(f"[{cfg.ts()}] [ERROR] OAuth 授权链路追踪失败 请更换域名")
+        _log_oauth_chain_failure(
+            "final_oauth_chain_unresolved",
+            current_url=current_url,
+            resp=resp,
+            trace=oauth_trace,
+            note="最终既没有命中授权回调，也没有落到可处理的 consent/workspace 路径。",
+        )
         return None, None
 
     except Exception as e:
         print(f"[{cfg.ts()}] [ERROR] 注册主流程发生严重异常: {e}")
+        print(f"[{cfg.ts()}] [ERROR] 异常堆栈: {_short_text(traceback.format_exc(), 3000)}")
         return None, None
 
 def refresh_oauth_token(refresh_token: str, proxies: Any = None) -> Tuple[bool, dict]:
