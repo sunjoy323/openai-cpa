@@ -292,6 +292,13 @@ def _recipient_matches_imap_message(message: Message, email_addr: str, body: str
     return email_lower in (body or "").lower()
 
 
+def _preview_text(value: str, limit: int = 120) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    return text if len(text) <= limit else f"{text[:limit]}..."
+
+
 def _extract_mail_fields(mail: dict) -> dict:
     sender = str(
         mail.get("source") or mail.get("from") or
@@ -474,7 +481,7 @@ def get_oai_code(
             print(f"\n[{cfg.ts()}] [ERROR] IMAP 初始登录失败: {e}{extra_tip}")
             mail_conn = None
 
-    for _ in range(20):
+    for attempt in range(1, 21):
         if getattr(cfg, 'GLOBAL_STOP', False): return ""
         try:
             if mode == "mail_curl":
@@ -527,6 +534,10 @@ def get_oai_code(
                                     return code
 
             elif mode == "imap":
+                print(
+                    f"\n[{cfg.ts()}] [DEBUG] IMAP 轮询第 {attempt}/20 次，"
+                    f"当前已处理邮件数={len(processed_mail_ids)}。"
+                )
                 if not mail_conn:
                     try:
                         mail_conn = _create_and_login_imap_conn()
@@ -538,8 +549,10 @@ def get_oai_code(
 
                 folders = ["INBOX", "Junk", '"Junk Email"', "Spam",
                            '"[Gmail]/Spam"', '"垃圾邮件"']
+                matched_code = False
                 for folder in folders:
                     try:
+                        print(f"\n[{cfg.ts()}] [DEBUG] IMAP 准备选择文件夹: {folder}")
                         mail_conn.noop()
                         status, select_data = mail_conn.select(folder, readonly=True)
                         if status != "OK":
@@ -547,7 +560,9 @@ def get_oai_code(
                                 print(f"\n[{cfg.ts()}] [ERROR] IMAP 文件夹选择被拒绝: {select_data}")
                                 mail_conn = None
                                 break
+                            print(f"\n[{cfg.ts()}] [DEBUG] IMAP 文件夹不可用，跳过 {folder}: {select_data}")
                             continue
+                        print(f"\n[{cfg.ts()}] [DEBUG] IMAP 文件夹选择成功: {folder}")
 
                         status, messages = mail_conn.uid("search", None, "ALL")
                         fetch_by_uid = True
@@ -555,12 +570,20 @@ def get_oai_code(
                             status, messages = mail_conn.search(None, "ALL")
                             fetch_by_uid = False
                         if status != "OK" or not messages or not messages[0]:
+                            print(f"\n[{cfg.ts()}] [DEBUG] IMAP 文件夹 {folder} 中未检索到邮件。")
                             continue
 
                         message_ids = messages[0].split()
-                        for mail_id in reversed(message_ids[-50:]):
+                        scan_ids = message_ids[-50:]
+                        print(
+                            f"\n[{cfg.ts()}] [DEBUG] IMAP 文件夹 {folder} 检索成功，"
+                            f"总邮件数={len(message_ids)}，本轮扫描最近 {len(scan_ids)} 封，"
+                            f"查询方式={'UID' if fetch_by_uid else 'SEQ'}。"
+                        )
+                        for mail_id in reversed(scan_ids):
                             msg_key = f"{folder}:{mail_id.decode('utf-8', 'ignore') if isinstance(mail_id, bytes) else str(mail_id)}"
                             if msg_key in processed_mail_ids:
+                                print(f"\n[{cfg.ts()}] [DEBUG] 跳过已处理邮件: {msg_key}")
                                 continue
 
                             if fetch_by_uid:
@@ -568,6 +591,7 @@ def get_oai_code(
                             else:
                                 res, data = mail_conn.fetch(mail_id, "(RFC822)")
                             if res != "OK" or not data:
+                                print(f"\n[{cfg.ts()}] [WARNING] 拉取邮件失败: {msg_key}, status={res}")
                                 processed_mail_ids.add(msg_key)
                                 continue
 
@@ -577,6 +601,7 @@ def get_oai_code(
                                     raw_message = resp_part[1]
                                     break
                             if not raw_message:
+                                print(f"\n[{cfg.ts()}] [WARNING] 邮件原文为空，跳过: {msg_key}")
                                 processed_mail_ids.add(msg_key)
                                 continue
 
@@ -584,6 +609,7 @@ def get_oai_code(
                             msg = email_lib.message_from_bytes(raw_message)
                             msg_ts = _message_timestamp(msg)
                             if msg_ts is not None and msg_ts < (imap_wait_started_at - 30):
+                                print(f"\n[{cfg.ts()}] [DEBUG] 邮件时间过早，跳过: {msg_key}, ts={msg_ts:.0f}")
                                 processed_mail_ids.add(msg_key)
                                 continue
 
@@ -591,11 +617,21 @@ def get_oai_code(
                             subject = _decode_mime_header(str(msg.get("Subject", "")))
                             content = _extract_body_from_message(msg)
                             full_content = f"{sender}\n{subject}\n{content}".strip()
+                            print(
+                                f"\n[{cfg.ts()}] [DEBUG] 正在检查邮件: {msg_key}, "
+                                f"from={_preview_text(sender, 80) or '-'}, "
+                                f"subject={_preview_text(subject, 100) or '-'}"
+                            )
 
                             if "openai" not in full_content.lower():
+                                print(f"\n[{cfg.ts()}] [DEBUG] 邮件不包含 openai 关键字，跳过: {msg_key}")
                                 processed_mail_ids.add(msg_key)
                                 continue
                             if not _recipient_matches_imap_message(msg, email, content):
+                                print(
+                                    f"\n[{cfg.ts()}] [DEBUG] 邮件收件人不匹配目标邮箱，跳过: {msg_key}, "
+                                    f"target={mask_email(email)}"
+                                )
                                 processed_mail_ids.add(msg_key)
                                 continue
 
@@ -603,6 +639,7 @@ def get_oai_code(
                             if code:
                                 processed_mail_ids.add(msg_key)
                                 print(f"\n[{cfg.ts()}] [SUCCESS] 验证码: {code} (folder={folder})")
+                                matched_code = True
                                 try:
                                     if fetch_by_uid:
                                         mail_conn.uid("store", mail_id, "+FLAGS", r"(\Deleted)")
@@ -616,16 +653,19 @@ def get_oai_code(
                                 except Exception:
                                     pass
                                 return code
+                            print(f"\n[{cfg.ts()}] [DEBUG] 邮件命中 OpenAI 但未提取到验证码: {msg_key}")
                             processed_mail_ids.add(msg_key)
                     except imaplib.IMAP4.abort:
                         print(f"\n[{cfg.ts()}] [WARNING] IMAP 连接断开，将在下次循环重连...")
                         mail_conn = None
                         break
                     except Exception as e:
-                        if "Spam" in folder:
-                            print(f"\n[{cfg.ts()}] [DEBUG] 访问垃圾箱失败: {e}")
-                if mail_conn is not None:
-                    print(".", end="", flush=True)
+                        print(f"\n[{cfg.ts()}] [WARNING] IMAP 扫描文件夹异常 {folder}: {e}")
+                if not matched_code and mail_conn is not None:
+                    print(
+                        f"\n[{cfg.ts()}] [DEBUG] IMAP 第 {attempt}/20 次轮询结束，"
+                        f"本轮未找到验证码邮件。"
+                    )
 
             elif mode == "freemail":
                 headers = {
@@ -736,8 +776,11 @@ def get_oai_code(
                 else:
                     print(".", end="", flush=True)
 
-        except Exception:
-            print(".", end="", flush=True)
+        except Exception as e:
+            if mode == "imap":
+                print(f"\n[{cfg.ts()}] [ERROR] IMAP 轮询主流程异常: {e}")
+            else:
+                print(".", end="", flush=True)
 
         time.sleep(3)
 
