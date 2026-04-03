@@ -11,6 +11,7 @@ createApp({
             tabs: [
                 { id: 'console', name: '运行主页', icon: '💻' },
                 { id: 'accounts', name: '账号库存', icon: '📦' },
+                { id: 'manual_review_accounts', name: '人工复核', icon: '🧑‍⚖️' },
                 { id: 'email', name: '邮箱配置', icon: '📧' },
 				{ id: 'cf_routes', name: 'CF 路由', icon: '🌍' },
                 { id: 'proxy', name: '网络代理', icon: '🌐' },
@@ -43,6 +44,11 @@ createApp({
 			currentPage: 1,
             pageSize: 10,
             totalAccounts: 0,
+            manualReviewAccounts: [],
+            manualReviewCurrentPage: 1,
+            manualReviewPageSize: 10,
+            manualReviewTotal: 0,
+            manualReviewLoadingEmail: '',
             evtSource: null,
             stats: {
                 success: 0, failed: 0, retries: 0, total: 0, target: 0,
@@ -74,6 +80,9 @@ createApp({
 	computed: {
         totalPages() {
             return Math.ceil(this.totalAccounts / this.pageSize) || 1;
+        },
+        manualReviewTotalPages() {
+            return Math.ceil(this.manualReviewTotal / this.manualReviewPageSize) || 1;
         }
     },
     methods: {
@@ -141,6 +150,7 @@ createApp({
         initApp() {
             this.fetchConfig();
             this.fetchAccounts();
+            this.fetchManualReviewAccounts();
             this.initSSE();
             this.startStatsPolling();
         },
@@ -212,11 +222,35 @@ createApp({
                 console.error("获取账号列表失败:", e);
             }
         },
+        async fetchManualReviewAccounts(isManual = false) {
+            if (isManual) {
+                this.manualReviewCurrentPage = 1;
+            }
+            try {
+                const res = await this.authFetch(`/api/manual-review-accounts?page=${this.manualReviewCurrentPage}&page_size=${this.manualReviewPageSize}`);
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.manualReviewAccounts = data.data || [];
+                    this.manualReviewTotal = data.total !== undefined ? data.total : this.manualReviewAccounts.length;
+                    if (isManual) this.showToast("人工复核列表已刷新！", "success");
+                } else if (isManual) {
+                    this.showToast(data.message || '人工复核列表获取失败', 'error');
+                }
+            } catch (e) {
+                console.error("获取人工复核账号列表失败:", e);
+                if (isManual) this.showToast('人工复核列表请求失败，请检查后端。', 'error');
+            }
+        },
 		changePage(newPage) {
             if (newPage < 1 || newPage > this.totalPages) return;
             this.currentPage = newPage;
             this.selectedAccounts = []; 
             this.fetchAccounts(false);
+        },
+        changeManualReviewPage(newPage) {
+            if (newPage < 1 || newPage > this.manualReviewTotalPages) return;
+            this.manualReviewCurrentPage = newPage;
+            this.fetchManualReviewAccounts(false);
         },
 		changePageSize() {
             this.currentPage = 1;
@@ -225,10 +259,16 @@ createApp({
             
             this.fetchAccounts(false);
         },
+        changeManualReviewPageSize() {
+            this.manualReviewCurrentPage = 1;
+            this.fetchManualReviewAccounts(false);
+        },
         switchTab(tabId) {
             this.currentTab = tabId;
             if (tabId === 'accounts') {
                 this.fetchAccounts();
+            } else if (tabId === 'manual_review_accounts') {
+                this.fetchManualReviewAccounts();
             }
         },
         async exportSelectedAccounts() {
@@ -448,6 +488,29 @@ createApp({
                 const result = await res.json();
                 this.showToast(result.message, result.status);
             } catch (e) {}
+        },
+        async retryManualReviewLogin(account) {
+            if (!account || !account.email) return;
+            const confirmed = await this.customConfirm(
+                `确定现在尝试为 ${this.maskEmail(account.email)} 自动登录补拿 Token 吗？\n建议先确认已经间隔了一段时间，并且当前代理环境正常。`
+            );
+            if (!confirmed) return;
+
+            this.manualReviewLoadingEmail = account.email;
+            try {
+                const res = await this.authFetch('/api/manual-review-accounts/action', {
+                    method: 'POST',
+                    body: JSON.stringify({ email: account.email, action: 'retry_login' })
+                });
+                const result = await res.json();
+                this.showToast(result.message, result.status);
+                await this.fetchManualReviewAccounts(false);
+                await this.fetchAccounts(false);
+            } catch (e) {
+                this.showToast('人工复核自动登录请求失败，请检查后端。', 'error');
+            } finally {
+                this.manualReviewLoadingEmail = '';
+            }
         },
         async clearLogs() {
             this.logs = []; 

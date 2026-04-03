@@ -73,7 +73,7 @@
                     <span class="font-black text-lg tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">Wenfxl Manager</span>
                 </div>
                 <nav class="flex-1 px-3 py-4 space-y-1.5 overflow-y-auto">
-                    <button v-for="tab in tabs" :key="tab.id" @click="currentTab = tab.id"
+                    <button v-for="tab in tabs" :key="tab.id" @click="switchTab(tab.id)"
                             :class="['w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-all', 
                                      currentTab === tab.id ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-100']">
                         <span>{{ tab.icon }}</span>
@@ -273,6 +273,99 @@
 									</button>
 								</div>
 							</div>
+                        </div>
+
+                        <div v-show="currentTab === 'manual_review_accounts'" class="bg-white rounded-xl shadow-md overflow-hidden border border-amber-100">
+                            <div class="px-6 py-5 border-b border-amber-100 flex justify-between items-center bg-amber-50/60">
+                                <div>
+                                    <h2 class="text-xl font-extrabold text-gray-800">人工复核账号池</h2>
+                                    <p class="text-sm text-amber-700 mt-1">这些账号通常已经注册成功，只是在 OAuth 授权阶段命中了 <code>add-phone</code> 或其他异常链路，支持稍后人工触发自动补拿 Token。</p>
+                                </div>
+                                <div class="flex flex-wrap gap-3 justify-end items-center">
+									<button @click="showAccountsPlaintext = !showAccountsPlaintext" class="text-sm bg-white text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-100 transition shadow-sm font-bold flex items-center gap-2 border border-amber-200">
+										<span>{{ showAccountsPlaintext ? '🙈' : '👁️' }}</span> {{ showAccountsPlaintext ? '脱敏' : '明文' }}
+									</button>
+                                    <button @click="fetchManualReviewAccounts(true)" class="text-sm bg-amber-600 text-white px-5 py-2 rounded-lg hover:bg-amber-700 transition shadow-md font-bold flex items-center gap-2">
+                                        <span>🔄</span> 刷新列表
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="min-w-full divide-y divide-amber-100">
+                                    <thead class="bg-amber-50/70">
+                                        <tr>
+                                            <th class="px-4 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider w-16">#</th>
+                                            <th class="px-4 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">邮箱账号</th>
+                                            <th class="px-4 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">登录密码</th>
+                                            <th class="px-4 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">状态</th>
+                                            <th class="px-4 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">阶段</th>
+                                            <th class="px-4 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">当前 URL</th>
+                                            <th class="px-4 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">备注 / 最近结果</th>
+                                            <th class="px-4 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">更新时间</th>
+                                            <th class="px-4 py-4 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="bg-white divide-y divide-amber-50">
+                                        <tr v-if="manualReviewAccounts.length === 0">
+                                            <td colspan="9" class="px-6 py-12 text-center text-gray-400 font-medium">暂无待人工复核账号</td>
+                                        </tr>
+                                        <tr v-for="(acc, index) in manualReviewAccounts" :key="acc.email" class="hover:bg-amber-50/40 transition duration-150">
+                                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-400 font-mono">{{ (manualReviewCurrentPage - 1) * manualReviewPageSize + index + 1 }}</td>
+                                            <td class="px-4 py-4 whitespace-nowrap text-sm font-bold text-gray-700">
+                                                {{ showAccountsPlaintext ? acc.email : maskEmail(acc.email) }}
+                                            </td>
+                                            <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500 font-mono bg-white rounded px-2 border">
+                                                {{ showAccountsPlaintext ? acc.password : '••••••••' }}
+                                            </td>
+                                            <td class="px-4 py-4 whitespace-nowrap">
+                                                <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold border"
+                                                      :class="acc.status === 'manual_login_required'
+                                                          ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                                          : 'bg-red-100 text-red-700 border-red-200'">
+                                                    {{ acc.status || 'unknown' }}
+                                                </span>
+                                            </td>
+                                            <td class="px-4 py-4 align-top text-sm text-gray-600 whitespace-normal break-all min-w-[180px]">{{ acc.stage || '-' }}</td>
+                                            <td class="px-4 py-4 align-top text-xs text-gray-500 font-mono whitespace-normal break-all min-w-[220px]">{{ acc.current_url || '-' }}</td>
+                                            <td class="px-4 py-4 align-top text-sm text-gray-600 whitespace-normal break-all min-w-[260px]">
+                                                <div>{{ acc.note || '-' }}</div>
+                                                <div v-if="acc.last_result" class="mt-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded p-2">{{ acc.last_result }}</div>
+                                            </td>
+                                            <td class="px-4 py-4 align-top text-xs text-gray-500 whitespace-normal min-w-[150px]">
+                                                <div>更新: {{ acc.updated_at || '-' }}</div>
+                                                <div class="mt-1 text-amber-700">最近尝试: {{ acc.last_attempt_at || '-' }}</div>
+                                            </td>
+                                            <td class="px-4 py-4 whitespace-nowrap text-center text-sm font-medium">
+                                                <button @click="retryManualReviewLogin(acc)"
+                                                        :disabled="manualReviewLoadingEmail === acc.email"
+                                                        class="text-amber-800 bg-amber-100 hover:bg-amber-200 px-3 py-1.5 rounded-md transition font-bold shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                                                    {{ manualReviewLoadingEmail === acc.email ? '处理中...' : '尝试获取 Token' }}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="px-6 py-4 border-t border-amber-100 bg-amber-50/40 flex items-center justify-between rounded-b-xl">
+                                <div class="text-sm text-gray-500 font-bold">
+                                    共 <span class="text-amber-600 text-base">{{ manualReviewTotal }}</span> 个待复核账号，当前第 <span class="text-gray-800">{{ manualReviewCurrentPage }}</span> / {{ manualReviewTotalPages }} 页
+                                    <select v-model.number="manualReviewPageSize" @change="changeManualReviewPageSize" class="bg-white border border-amber-200 text-gray-700 py-1 px-2 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-500 transition cursor-pointer">
+                                        <option :value="10">10 条 / 页</option>
+                                        <option :value="20">20 条 / 页</option>
+                                        <option :value="50">50 条 / 页</option>
+                                        <option :value="100">100 条 / 页</option>
+                                        <option :value="200">200 条 / 页</option>
+                                    </select>
+                                </div>
+                                <div class="flex gap-2">
+                                    <button @click="changeManualReviewPage(manualReviewCurrentPage - 1)" :disabled="manualReviewCurrentPage <= 1" class="px-4 py-2 rounded-lg text-sm font-bold bg-white border border-amber-200 text-gray-700 hover:bg-amber-50 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition">
+                                        上一页
+                                    </button>
+                                    <button @click="changeManualReviewPage(manualReviewCurrentPage + 1)" :disabled="manualReviewCurrentPage >= manualReviewTotalPages" class="px-4 py-2 rounded-lg text-sm font-bold bg-white border border-amber-200 text-gray-700 hover:bg-amber-50 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition">
+                                        下一页
+                                    </button>
+                                </div>
+                            </div>
                         </div>
 
 						<div v-show="currentTab === 'cf_routes'" class="bg-white rounded-xl shadow-md overflow-hidden border border-gray-100 flex flex-col h-[calc(100vh-160px)]">

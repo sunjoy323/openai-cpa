@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from cloudflare import Cloudflare
 from contextlib import asynccontextmanager
 from utils import core_engine
+from utils import register as register_service
 from utils.config import reload_all_configs
 from utils import db_manager
 from utils.sub2api_client import Sub2APIClient
@@ -486,6 +487,81 @@ async def get_accounts(page: int = Query(1), page_size: int = Query(50), token: 
         "page": page,
         "page_size": page_size
     }
+
+
+@app.get("/api/manual-review-accounts")
+async def get_manual_review_accounts(
+    page: int = Query(1),
+    page_size: int = Query(50),
+    token: str = Depends(verify_token),
+):
+    result = db_manager.get_manual_review_accounts_page(page, page_size)
+    return {
+        "status": "success",
+        "data": result["data"],
+        "total": result["total"],
+        "page": page,
+        "page_size": page_size,
+    }
+
+@app.post("/api/manual-review-accounts/action")
+async def manual_review_account_action(data: dict, token: str = Depends(verify_token)):
+    email = str(data.get("email") or "").strip()
+    action = str(data.get("action") or "").strip()
+
+    if not email:
+        return {"status": "error", "message": "缺少邮箱参数。"}
+    if action != "retry_login":
+        return {"status": "error", "message": f"不支持的人工复核动作: {action}"}
+
+    account = db_manager.get_manual_review_account(email)
+    if not account:
+        return {"status": "error", "message": f"未找到 {email} 的人工复核记录。"}
+
+    try:
+        reload_all_configs()
+    except Exception as e:
+        print(f"[{core_engine.ts()}] [WARNING] 人工复核动作前重载配置失败，将继续使用当前配置: {e}")
+
+    proxy = getattr(core_engine.cfg, "DEFAULT_PROXY", "") or None
+    print(f"[{core_engine.ts()}] [INFO] 开始处理人工复核账号补拿 Token: {email}")
+    result = register_service.retry_manual_review_login(
+        email=email,
+        password=account.get("password", ""),
+        email_jwt=account.get("email_jwt", ""),
+        proxy=proxy,
+    )
+
+    if result.get("success") and result.get("token_json"):
+        if db_manager.save_account_to_db(email, account.get("password", ""), result["token_json"]):
+            return {
+                "status": "success",
+                "message": f"账号 {email} 已成功自动登录并转入本地账号库。",
+            }
+        db_manager.update_manual_review_account(
+            email,
+            status="retry_failed",
+            stage="save_account_to_db_failed",
+            current_url=result.get("current_url", "") or account.get("current_url", ""),
+            note="自动登录已拿到 token，但写入本地账号库失败。",
+            last_result="自动登录成功但本地入库失败，请检查数据库日志。",
+        )
+        return {"status": "error", "message": "已拿到 token，但写入本地账号库失败。"}
+
+    fail_status = result.get("status") or "retry_failed"
+    fail_stage = result.get("stage") or account.get("stage", "")
+    fail_url = result.get("current_url", "") or account.get("current_url", "")
+    fail_note = result.get("note") or account.get("note", "") or "自动登录未拿到 token。"
+    fail_message = result.get("message") or fail_note
+    db_manager.update_manual_review_account(
+        email,
+        status=fail_status,
+        stage=fail_stage,
+        current_url=fail_url,
+        note=fail_note,
+        last_result=fail_message,
+    )
+    return {"status": "error", "message": fail_message}
 
 @app.post("/api/account/action")
 async def account_action(data: dict, token: str = Depends(verify_token)):
