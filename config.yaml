@@ -15,6 +15,8 @@ mail_domains: "domain1.com,domain2.xyz,domain3.net"
 enable_sub_domains: false
 
 sub_domain_count: 1
+#域名层级
+sub_domain_level: 1
 # 你的临时邮箱 后端API 基础地址 结尾不要/，IMAP和freemail/cloudmail/mail_curl不需要配置此项。注意：用浏览器打开后端api验证是否可访问
 gptmail_base: "https://your-domain.com" #是后端访问链接，不是前端访问链接，正常情况浏览器打开访问会显示ok就是对的
 
@@ -188,11 +190,7 @@ normal_mode:
   target_count: 2
 # WEB端密码
 web_password: admin
-# 二级域名列表
-sub_domains_list: ''
 #CF账号
 cf_api_email: 
 #CF KEY
 cf_api_key: 
-sub_domain_fail_threshold: 1
-sub_domain_refill_count: 2
