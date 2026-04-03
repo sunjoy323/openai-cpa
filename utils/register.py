@@ -15,6 +15,12 @@ from typing import Any, Dict, Optional, Tuple
 
 from curl_cffi import requests
 
+try:
+    from utils.sentinel import get_token as _native_get_token, clear_cache as _native_clear_cache
+except Exception:
+    _native_get_token = None
+    _native_clear_cache = None
+
 from utils import config as cfg
 from utils.mail_service import get_email_and_token, get_oai_code, mask_email
 
@@ -398,6 +404,41 @@ def _get_sentinel_token(
     except Exception:
         return ""
 
+
+def _clear_sentinel_cache() -> None:
+    if _native_clear_cache is None:
+        return
+    try:
+        _native_clear_cache()
+    except Exception as exc:
+        print(f"[{cfg.ts()}] [WARNING] 清理 sentinel 缓存失败，将继续使用当前会话缓存: {exc}")
+
+
+def _challenge_token(
+    session: requests.Session,
+    flow: str,
+    proxies: Any = None,
+    *,
+    use: bool = False,
+) -> str:
+    if _native_get_token is not None:
+        try:
+            token = _native_get_token(session, flow, proxies, use=use)
+            token = str(token or "").strip()
+            if token:
+                return token
+        except TypeError:
+            try:
+                token = _native_get_token(session, flow, proxies)
+                token = str(token or "").strip()
+                if token:
+                    return token
+            except Exception as exc:
+                print(f"[{cfg.ts()}] [WARNING] 原生 sentinel 取 token 失败，flow={flow}: {exc}")
+        except Exception as exc:
+            print(f"[{cfg.ts()}] [WARNING] 原生 sentinel 取 token 失败，flow={flow}: {exc}")
+    return _get_sentinel_token(session, flow, proxies)
+
 def _follow_redirect_chain_local(
     session: requests.Session,
     start_url: str,
@@ -703,6 +744,7 @@ def run(proxy: Optional[str]) -> tuple:
     if proxy and proxy.startswith("socks5://"):
         proxy = proxy.replace("socks5://", "socks5h://")
     proxies = {"http": proxy, "https": proxy} if proxy else None
+    _clear_sentinel_cache()
 
     s_reg = requests.Session(proxies=proxies, impersonate="chrome110")
     s_reg.timeout = 30
@@ -740,17 +782,22 @@ def run(proxy: Optional[str]) -> tuple:
 
         print(f"[{cfg.ts()}] [INFO] 正在计算风控算力挑战...")
 
-        sentinel_signup = _get_sentinel_token(s_reg, "authorize_continue", proxies)
+        sentinel_signup = _challenge_token(s_reg, "authorize_continue", proxies)
+        signup_headers = _oai_headers(
+            did,
+            {
+                "Referer": "https://auth.openai.com/create-account",
+                "content-type": "application/json",
+            },
+        )
+        if sentinel_signup:
+            signup_headers["openai-sentinel-token"] = sentinel_signup
 
         signup_resp = _post_with_retry(
             s_reg,
             "https://auth.openai.com/api/accounts/authorize/continue",
-            headers=_oai_headers(did, {
-                "Referer":               "https://auth.openai.com/create-account",
-                "openai-sentinel-token": sentinel_signup,
-                "content-type":          "application/json",
-            }),
-            data=_compact_json({"username": {"value": email, "kind": "email"}, "screen_hint": "signup"}),
+            headers=signup_headers,
+            json_body={"username": {"value": email, "kind": "email"}, "screen_hint": "signup"},
             proxies=proxies,
         )
 
@@ -761,17 +808,22 @@ def run(proxy: Optional[str]) -> tuple:
             _log_registration_http_failure("注册环节", signup_resp)
             return None, None
 
-        sentinel_reg = _get_sentinel_token(s_reg, "authorize_continue", proxies)
+        sentinel_reg = _challenge_token(s_reg, "username_password_create", proxies, use=True)
+        pwd_headers = _oai_headers(
+            did,
+            {
+                "Referer": "https://auth.openai.com/create-account/password",
+                "content-type": "application/json",
+            },
+        )
+        if sentinel_reg:
+            pwd_headers["openai-sentinel-token"] = sentinel_reg
 
         pwd_resp = _post_with_retry(
             s_reg,
             "https://auth.openai.com/api/accounts/user/register",
-            headers=_oai_headers(did, {
-                "Referer":               "https://auth.openai.com/create-account/password",
-                "openai-sentinel-token": sentinel_reg,
-                "content-type":          "application/json",
-            }),
-            data=_compact_json({"password": password, "username": email}),
+            headers=pwd_headers,
+            json_body={"password": password, "username": email},
             proxies=proxies,
         )
 
@@ -788,15 +840,22 @@ def run(proxy: Optional[str]) -> tuple:
         if need_otp:
             otp_url = reg_json.get("continue_url", "")
             if otp_url:
+                otp_headers = _oai_headers(
+                    did,
+                    {
+                        "Referer": "https://auth.openai.com/create-account/password",
+                        "content-type": "application/json",
+                    },
+                )
+                if sentinel_reg:
+                    otp_headers["openai-sentinel-token"] = sentinel_reg
                 _post_with_retry(
                     s_reg,
                     otp_url if otp_url.startswith("http") else f"https://auth.openai.com{otp_url}",
-                    headers={
-                        "Referer":               "https://auth.openai.com/create-account/password",
-                        "openai-sentinel-token": sentinel_reg,
-                        "content-type":          "application/json",
-                    },
-                    data=_compact_json({}), proxies=proxies, timeout=30,
+                    headers=otp_headers,
+                    json_body={},
+                    proxies=proxies,
+                    timeout=30,
                 )
 
             code = ""
@@ -804,14 +863,16 @@ def run(proxy: Optional[str]) -> tuple:
                 if resend_attempt > 0:
                     print(f"\n[{cfg.ts()}] [INFO] 正在重试 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
                     try:
+                        resend_headers = _oai_headers(did, {"content-type": "application/json"})
+                        if sentinel_reg:
+                            resend_headers["openai-sentinel-token"] = sentinel_reg
                         _post_with_retry(
                             s_reg,
                             "https://auth.openai.com/api/accounts/email-otp/resend",
-                            headers={
-                                "openai-sentinel-token": sentinel_reg,
-                                "content-type": "application/json",
-                            },
-                            data=_compact_json({}), proxies=proxies, timeout=15,
+                            headers=resend_headers,
+                            json_body={},
+                            proxies=proxies,
+                            timeout=15,
                         )
                         time.sleep(2)
                     except Exception as e:
@@ -825,16 +886,22 @@ def run(proxy: Optional[str]) -> tuple:
                 print(f"[{cfg.ts()}] [ERROR] 重试次数上限，丢弃当前邮箱。")
                 return None, None
 
-            sentinel_otp = _get_sentinel_token(s_reg, "authorize_continue", proxies)
+            sentinel_otp = _challenge_token(s_reg, "authorize_continue", proxies)
+            val_headers = _oai_headers(
+                did,
+                {
+                    "Referer": "https://auth.openai.com/email-verification",
+                    "content-type": "application/json",
+                },
+            )
+            if sentinel_otp:
+                val_headers["openai-sentinel-token"] = sentinel_otp
             code_resp = _post_with_retry(
                 s_reg,
                 "https://auth.openai.com/api/accounts/email-otp/validate",
-                headers={
-                    "Referer":               "https://auth.openai.com/email-verification",
-                    "openai-sentinel-token": sentinel_otp,
-                    "content-type":          "application/json",
-                },
-                data=_compact_json({"code": code}), proxies=proxies,
+                headers=val_headers,
+                json_body={"code": code},
+                proxies=proxies,
             )
             if code_resp.status_code != 200:
                 print(f"[{cfg.ts()}] [ERROR] 验证码校验未通过: {code_resp.text}")
@@ -890,14 +957,22 @@ def run(proxy: Optional[str]) -> tuple:
         print(f"[{cfg.ts()}] [INFO] 初始化账户信息 "
               f"(昵称: {user_info['name']}, 生日: {user_info['birthdate']})...")
 
+        sentinel_create = _challenge_token(s_reg, "create_account", proxies, use=True)
+        create_headers = _oai_headers(
+            did,
+            {
+                "Referer": about_you_referer,
+                "content-type": "application/json",
+            },
+        )
+        if sentinel_create:
+            create_headers["openai-sentinel-token"] = sentinel_create
         create_account_resp = _post_with_retry(
             s_reg,
             "https://auth.openai.com/api/accounts/create_account",
-            headers=_oai_headers(did, {
-                "Referer":      about_you_referer,
-                "content-type": "application/json",
-            }),
-            data=_compact_json(user_info), proxies=proxies,
+            headers=create_headers,
+            json_body=user_info,
+            proxies=proxies,
         )
 
         if create_account_resp.status_code != 200:
@@ -978,19 +1053,21 @@ def run(proxy: Optional[str]) -> tuple:
             ), password
 
 
-        sentinel_log = _get_sentinel_token(s_log, "authorize_continue", proxies)
+        sentinel_log = _challenge_token(s_log, "authorize_continue", proxies)
+        log_start_headers = _oai_headers(
+            s_log.cookies.get("oai-did") or "",
+            {
+                "Referer": current_url,
+                "content-type": "application/json",
+            },
+        )
+        if sentinel_log:
+            log_start_headers["openai-sentinel-token"] = sentinel_log
         login_start_resp = _post_with_retry(
             s_log,
             "https://auth.openai.com/api/accounts/authorize/continue",
-            headers=_oai_headers(
-                s_log.cookies.get("oai-did") or "",
-                {
-                    "Referer":               current_url,
-                    "openai-sentinel-token": sentinel_log,
-                    "content-type":          "application/json",
-                },
-            ),
-            data=_compact_json({"username": {"value": email, "kind": "email"}}),
+            headers=log_start_headers,
+            json_body={"username": {"value": email, "kind": "email"}},
             proxies=proxies, allow_redirects=False,
         )
         if login_start_resp.status_code != 200:
@@ -1021,19 +1098,22 @@ def run(proxy: Optional[str]) -> tuple:
             s_log, pwd_page_url, proxies, trace=oauth_trace, stage="password_page"
         )
 
-        sentinel_pwd = _get_sentinel_token(s_log, "password_verify", proxies)
+        sentinel_pwd = _challenge_token(s_log, "password_verify", proxies)
+        login_pwd_headers = _oai_headers(
+            s_log.cookies.get("oai-did") or "",
+            {
+                "Referer": current_url,
+                "content-type": "application/json",
+            },
+        )
+        if sentinel_pwd:
+            login_pwd_headers["openai-sentinel-token"] = sentinel_pwd
         pwd_login_resp = _post_with_retry(
             s_log,
             "https://auth.openai.com/api/accounts/password/verify",
-            headers=_oai_headers(
-                s_log.cookies.get("oai-did") or "",
-                {
-                    "Referer":               current_url,
-                    "openai-sentinel-token": sentinel_pwd,
-                    "content-type":          "application/json",
-                },
-            ),
-            data=_compact_json({"password": password}), proxies=proxies,
+            headers=login_pwd_headers,
+            json_body={"password": password},
+            proxies=proxies,
         )
         if pwd_login_resp.status_code != 200:
             _log_registration_http_failure("密码验证", pwd_login_resp)
@@ -1088,19 +1168,22 @@ def run(proxy: Optional[str]) -> tuple:
                 print(f"[{cfg.ts()}] [ERROR] 重新发送后依然未收到验证码，彻底放弃。")
                 return None, None
 
-            sentinel_otp2 = _get_sentinel_token(s_log, "authorize_continue", proxies)
+            sentinel_otp2 = _challenge_token(s_log, "authorize_continue", proxies)
+            val2_headers = _oai_headers(
+                s_log.cookies.get("oai-did") or "",
+                {
+                    "Referer": current_url,
+                    "content-type": "application/json",
+                },
+            )
+            if sentinel_otp2:
+                val2_headers["openai-sentinel-token"] = sentinel_otp2
             code2_resp = _post_with_retry(
                 s_log,
                 "https://auth.openai.com/api/accounts/email-otp/validate",
-                headers=_oai_headers(
-                    s_log.cookies.get("oai-did") or "",
-                    {
-                        "Referer":               current_url,
-                        "openai-sentinel-token": sentinel_otp2,
-                        "content-type":          "application/json",
-                    },
-                ),
-                data=_compact_json({"code": code2}), proxies=proxies,
+                headers=val2_headers,
+                json_body={"code": code2},
+                proxies=proxies,
             )
             if code2_resp.status_code != 200:
                 _log_registration_http_failure("二次安全验证 OTP 校验", code2_resp)

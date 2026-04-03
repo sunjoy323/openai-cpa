@@ -11,6 +11,7 @@ import random
 import string
 import urllib.request
 import urllib.parse
+import subprocess
 from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header, Query, Request
 from fastapi.staticfiles import StaticFiles
@@ -614,6 +615,7 @@ async def get_dashboard():
 if __name__ == "__main__":
     try: reload_all_configs()
     except: pass
+
     print("=" * 65)
     print(f"[{core_engine.ts()}] [系统] OpenAI 无限注册 & CPA 智能仓管")
     print(f"[{core_engine.ts()}] [系统] Author: (wenfxl)轩灵")

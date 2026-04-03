@@ -1,8 +1,9 @@
-fastapi
-uvicorn[standard]
-PyYAML
-pydantic
-requests
-curl_cffi
-PySocks
-cloudflare
+fastapi 
+uvicorn[standard] 
+PyYAML 
+pydantic 
+requests 
+curl_cffi 
+PySocks 
+cloudflare 
+playwright
