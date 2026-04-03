@@ -195,6 +195,31 @@ docker compose logs -f
 docker compose down
 ```
 
+### Local build helper script
+
+If you prefer building from local source, you can use:
+
+```bash
+./run-compose.sh local
+```
+
+If overseas package sources are slow, the script now supports build proxy parameters:
+
+```bash
+./run-compose.sh local --proxy http://127.0.0.1:7890
+```
+
+You can also use environment variables:
+
+```bash
+BUILD_PROXY=http://127.0.0.1:7890 ./run-compose.sh local
+```
+
+Optional parameters:
+- `--https-proxy URL`
+- `--all-proxy URL`
+- `--no-proxy host1,host2`
+
 Notes:
 - `./config.yaml:/app/config.yaml` means the container reads your host-side config directly.
 - `./data:/app/data` is used to persist runtime data, local database content, and exports.

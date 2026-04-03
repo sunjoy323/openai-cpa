@@ -3,16 +3,51 @@
 set -eu
 
 MODE="${1:-}"
+if [ "$#" -gt 0 ]; then
+    shift
+fi
+
+BUILD_PROXY="${BUILD_PROXY:-${HTTP_PROXY:-${http_proxy:-}}}"
+BUILD_HTTPS_PROXY="${BUILD_HTTPS_PROXY:-${HTTPS_PROXY:-${https_proxy:-}}}"
+BUILD_ALL_PROXY="${BUILD_ALL_PROXY:-${ALL_PROXY:-${all_proxy:-}}}"
+BUILD_NO_PROXY="${BUILD_NO_PROXY:-${NO_PROXY:-${no_proxy:-}}}"
 
 usage() {
     echo
     echo "Usage:"
-    echo "  ./run-compose.sh local   <-- Build from local source and start"
-    echo "  ./run-compose.sh remote  <-- Start with the current remote image"
-    echo "  ./run-compose.sh pull    <-- Pull the latest remote image and start"
-    echo "  ./run-compose.sh down    <-- Stop and remove containers"
-    echo "  ./run-compose.sh logs    <-- Show live logs"
+    echo "  ./run-compose.sh local [--proxy URL] [--https-proxy URL] [--all-proxy URL] [--no-proxy LIST]"
+    echo "                              Build from local source and start"
+    echo "  ./run-compose.sh remote      Start with the current remote image"
+    echo "  ./run-compose.sh pull        Pull the latest remote image and start"
+    echo "  ./run-compose.sh down        Stop and remove containers"
+    echo "  ./run-compose.sh logs        Show live logs"
     echo
+    echo "Examples:"
+    echo "  ./run-compose.sh local --proxy http://127.0.0.1:7890"
+    echo "  BUILD_PROXY=http://127.0.0.1:7890 ./run-compose.sh local"
+    echo
+}
+
+setup_build_proxy() {
+    if [ -n "$BUILD_PROXY" ] && [ -z "$BUILD_HTTPS_PROXY" ]; then
+        BUILD_HTTPS_PROXY="$BUILD_PROXY"
+    fi
+    if [ -n "$BUILD_PROXY" ] && [ -z "$BUILD_ALL_PROXY" ]; then
+        BUILD_ALL_PROXY="$BUILD_PROXY"
+    fi
+
+    if [ -n "$BUILD_PROXY$BUILD_HTTPS_PROXY$BUILD_ALL_PROXY$BUILD_NO_PROXY" ]; then
+        [ -n "$BUILD_PROXY" ] && export HTTP_PROXY="$BUILD_PROXY" http_proxy="$BUILD_PROXY"
+        [ -n "$BUILD_HTTPS_PROXY" ] && export HTTPS_PROXY="$BUILD_HTTPS_PROXY" https_proxy="$BUILD_HTTPS_PROXY"
+        [ -n "$BUILD_ALL_PROXY" ] && export ALL_PROXY="$BUILD_ALL_PROXY" all_proxy="$BUILD_ALL_PROXY"
+        [ -n "$BUILD_NO_PROXY" ] && export NO_PROXY="$BUILD_NO_PROXY" no_proxy="$BUILD_NO_PROXY"
+
+        echo "[INFO] Build proxy enabled for local image build."
+        [ -n "$BUILD_PROXY" ] && echo "[INFO] HTTP_PROXY=$BUILD_PROXY"
+        [ -n "$BUILD_HTTPS_PROXY" ] && echo "[INFO] HTTPS_PROXY=$BUILD_HTTPS_PROXY"
+        [ -n "$BUILD_ALL_PROXY" ] && echo "[INFO] ALL_PROXY=$BUILD_ALL_PROXY"
+        [ -n "$BUILD_NO_PROXY" ] && echo "[INFO] NO_PROXY=$BUILD_NO_PROXY"
+    fi
 }
 
 if [ -z "$MODE" ]; then
@@ -25,9 +60,44 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --proxy)
+            [ "$#" -ge 2 ] || { echo "[ERROR] Missing value for --proxy"; exit 1; }
+            BUILD_PROXY="$2"
+            shift 2
+            ;;
+        --https-proxy)
+            [ "$#" -ge 2 ] || { echo "[ERROR] Missing value for --https-proxy"; exit 1; }
+            BUILD_HTTPS_PROXY="$2"
+            shift 2
+            ;;
+        --all-proxy)
+            [ "$#" -ge 2 ] || { echo "[ERROR] Missing value for --all-proxy"; exit 1; }
+            BUILD_ALL_PROXY="$2"
+            shift 2
+            ;;
+        --no-proxy)
+            [ "$#" -ge 2 ] || { echo "[ERROR] Missing value for --no-proxy"; exit 1; }
+            BUILD_NO_PROXY="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "[ERROR] Unsupported option: $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
+
 case "$MODE" in
     local)
         echo "[INFO] Build from local source and start containers..."
+        setup_build_proxy
         docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build --force-recreate
         ;;
     remote)
