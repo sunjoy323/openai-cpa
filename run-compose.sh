@@ -28,6 +28,10 @@ usage() {
     echo
 }
 
+compose_local() {
+    docker compose -f docker-compose.yml -f docker-compose.local.yml "$@"
+}
+
 setup_build_proxy() {
     if [ -n "$BUILD_PROXY" ] && [ -z "$BUILD_HTTPS_PROXY" ]; then
         BUILD_HTTPS_PROXY="$BUILD_PROXY"
@@ -98,7 +102,10 @@ case "$MODE" in
     local)
         echo "[INFO] Build from local source and start containers..."
         setup_build_proxy
-        docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build --force-recreate
+        echo "[INFO] Step 1/2: explicit build for local image (codex-web)..."
+        compose_local build codex-web
+        echo "[INFO] Step 2/2: recreate containers with freshly built image..."
+        compose_local up -d --force-recreate --no-build
         ;;
     remote)
         echo "[INFO] Start containers with the current remote image..."
