@@ -2,8 +2,6 @@
 
 A Python-based registration and inventory management tool that is now centered around a **Web Console workflow** instead of a script-only workflow.
 
-**Latest version: 8.2.0**
-
 It combines:
 - multi-backend mailbox OTP retrieval
 - registration task orchestration
