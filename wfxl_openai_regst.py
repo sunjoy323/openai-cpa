@@ -12,6 +12,7 @@ import string
 import urllib.request
 import urllib.parse
 import subprocess
+import httpx
 from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header, Query, Request
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +20,7 @@ from fastapi.responses import HTMLResponse,StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
-from cloudflare import Cloudflare, APIError
+from cloudflare import Cloudflare, APIError, AsyncCloudflare
 from contextlib import asynccontextmanager
 from utils import core_engine
 from utils.config import reload_all_configs
@@ -273,190 +274,89 @@ async def save_config(new_config: dict, token: str = Depends(verify_token)):
         return {"status": "error", "message": f"❌ 保存失败: {str(e)}"}
 
 
+import httpx
+import asyncio
+from fastapi import Depends
+
+
 @app.post("/api/config/add_wildcard_dns")
 async def add_wildcard_dns(req: CFSyncExistingReq, token: str = Depends(verify_token)):
     try:
         main_list = [d.strip() for d in req.sub_domains.split(",") if d.strip()]
-        
         if not main_list:
             return {"status": "error", "message": "❌ 没有找到有效的主域名"}
 
-        cf = Cloudflare(api_email=req.api_email, api_key=req.api_key)
-        def process_single_domain(domain):
-            try:
-                zones = cf.zones.list(name=domain)
-                if not zones.result:
-                    return False
-                
-                zone_id = zones.result[0].id
-                records = [
-                    {"type": "MX", "name": "*", "content": "route3.mx.cloudflare.net", "priority": 36},
-                    {"type": "MX", "name": "*", "content": "route2.mx.cloudflare.net", "priority": 25},
-                    {"type": "MX", "name": "*", "content": "route1.mx.cloudflare.net", "priority": 51},
-                    {"type": "TXT", "name": "*", "content": '"v=spf1 include:_spf.mx.cloudflare.net ~all"'}
-                ]
+        proxy_url = getattr(core_engine.cfg, 'DEFAULT_PROXY', None)
+        print(f"🌍 [CF-DNS] 当前代理: {proxy_url}")
 
-                for rec in records:
-                    try:
-                        cf.dns.records.create(zone_id=zone_id, **rec, ttl=300)
-                    except APIError as e:
-                        if e.code == 81057: continue 
-                        print(f"[{domain}] 报错: {e.message}")
-                return True
-            except:
-                return False
-        tasks = [asyncio.to_thread(process_single_domain, dom) for dom in main_list]
-        results = await asyncio.gather(*tasks)
-
-        success_count = sum(1 for r in results if r)
-        return {
-            "status": "success",
-            "message": f"🚀 批量配置完成！成功处理 {success_count}/{len(main_list)} 个域名的泛解析记录。"
+        headers = {
+            "X-Auth-Email": req.api_email,
+            "X-Auth-Key": req.api_key,
+            "Content-Type": "application/json"
         }
 
+        client_kwargs = {"timeout": 30.0}
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+
+        semaphore = asyncio.Semaphore(2)
+
+        async def process_single_domain(client, domain):
+            async with semaphore:
+                try:
+                    print(f"⏳ 开始处理域名: {domain} ...")
+                    zone_url = f"https://api.cloudflare.com/client/v4/zones?name={domain}"
+                    zone_resp = await client.get(zone_url, headers=headers)
+                    zone_data = zone_resp.json()
+
+                    if not zone_data.get("success") or not zone_data.get("result"):
+                        print(f"❌ [{domain}] 未找到 Zone，CF 接口返回: {zone_data.get('errors', 'Unknown Error')}")
+                        return False
+
+                    zone_id = zone_data["result"][0]["id"]
+
+                    records = [
+                        {"type": "MX", "name": "*", "content": "route3.mx.cloudflare.net", "priority": 36, "ttl": 300},
+                        {"type": "MX", "name": "*", "content": "route2.mx.cloudflare.net", "priority": 25, "ttl": 300},
+                        {"type": "MX", "name": "*", "content": "route1.mx.cloudflare.net", "priority": 51, "ttl": 300},
+                        {"type": "TXT", "name": "*", "content": '"v=spf1 include:_spf.mx.cloudflare.net ~all"',
+                         "ttl": 300}
+                    ]
+                    record_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"
+                    for rec in records:
+                        rec_resp = await client.post(record_url, headers=headers, json=rec)
+                        rec_data = rec_resp.json()
+
+                        if not rec_data.get("success"):
+                            errors = rec_data.get("errors", [])
+                            is_exist = any(err.get("code") in [81057, 81058] for err in errors)
+                            if is_exist:
+                                print(f"⚡ [{domain}] 记录已存在无需重复创建。")
+                                continue
+                            print(f"⚠️ [{domain}] 记录创建报错: {errors}")
+
+                    print(f"✅ [{domain}] 解析处理成功！")
+                    return True
+
+                except Exception as e:
+                    print(f"❌ [{domain}] 请求严重异常: {repr(e)}")
+                    return False
+                finally:
+                    await asyncio.sleep(0.5)
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            tasks = [process_single_domain(client, dom) for dom in main_list]
+            results = await asyncio.gather(*tasks)
+
+        success_count = sum(1 for r in results if r)
+
+        if success_count == len(main_list):
+            return {"status": "success", "message": f"🚀 批量配置完成！成功处理 {success_count}/{len(main_list)} 个域名。"}
+        else:
+            return {"status": "error", "message": f"⚠️ 仅成功处理 {success_count}/{len(main_list)} 个，请查看后端控制台寻找报错原因。"}
+
     except Exception as e:
-        return {"status": "error", "message": f"执行异常: {str(e)}"}
-
-# @router.post("/api/config/add_wildcard_dns")
-# async def add_wildcard_dns_api(req: GenerateSubReq, token: str = Depends(verify_token)):
-    # try:
-        # cf = Cloudflare(api_email=api_email, api_key=api_key)
-        # main_list = [d.strip() for d in req.main_domains.split(",") if d.strip()]
-        # if not main_list:
-            # return {"status": "error", "message": "请填写主域名！"}
-
-        # # 2. 获取 API 配置 (从请求或配置中读取)
-        # # 建议统一使用 API Token，如果用 API Key 需要修改 headers
-        # api_token = req.api_key  
-        
-        # all_tasks = []
-
-        # # 3. 遍历主域名获取 Zone ID 并创建任务
-        # # 注意：为了效率，获取 Zone ID 也可以放到线程中
-        # for main_dom in main_list:
-            # # 这里的获取 Zone ID 逻辑可以沿用你之前的
-            # # 假设你使用的是 Cloudflare 官方库或 Requests
-            # # zones = cf.zones.list(name=main_dom)
-            
-            # zone_id = "从API获取到的ID" 
-            
-            # if not zone_id: continue
-            # all_tasks.append(asyncio.to_thread(
-                # cloudflare_dns_worker, api_token, zone_id, "MX", "*", "mail.example.com", 10
-            # ))
-            # all_tasks.append(asyncio.to_thread(
-                # cloudflare_dns_worker, api_token, zone_id, "TXT", "*", "v=spf1 include:_spf.google.com ~all"
-            # ))
-
-        # if all_tasks:
-            # results = await asyncio.gather(*all_tasks)
-            # success_count = sum(1 for r in results if r)
-        # else:
-            # success_count = 0
-
-        # return {
-            # "status": "success",
-            # "message": f"🚀 泛域名解析处理完成！成功下发 {success_count} 条记录。"
-        # }
-
-    # except Exception as e:
-        # return {"status": "error", "message": f"执行异常: {str(e)}"}
-
-# @app.post("/api/config/generate_subdomains")
-# async def generate_subdomains_api(req: GenerateSubReq, token: str = Depends(verify_token)):
-    # try:
-        # main_list = [d.strip() for d in req.main_domains.split(",") if d.strip()]
-        # if not main_list:
-            # return {"status": "error", "message": "请先在界面上方填写主域名池！"}
-
-        # level = getattr(req, 'level', 1)
-
-        # generated = []
-        # for main_dom in main_list:
-            # for _ in range(req.count):
-                # random_parts = []
-                # for _ in range(level):
-                    # random_parts.append(''.join(random.choices(string.ascii_lowercase + string.digits, k=8)))
-                
-                # full_sub = ".".join(random_parts) + f".{main_dom}"
-                # generated.append(full_sub)
-                
-        # generated_str = ",".join(generated)
-        # config_path = "config.yaml"
-        # try:
-            # with open(config_path, "r", encoding="utf-8") as f:
-                # c = yaml.safe_load(f) or {}
-        # except Exception:
-            # c = {}
-            
-        # c["sub_domains_list"] = generated_str
-        # c["sub_domain_count"] = req.count
-        # c["sub_domain_level"] = level
-        # c["cf_api_email"] = req.api_email
-        # c["cf_api_key"] = req.api_key
-        # c["enable_sub_domains"] = True
-        
-        # with open(config_path, "w", encoding="utf-8") as f:
-            # yaml.dump(c, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
-
-        # try: reload_all_configs()
-        # except Exception: pass
-
-        # return {
-            # "status": "success", 
-            # "domains": generated_str, 
-            # "message": f"成功生成 {len(generated)} 个 {level + 1}级 域名，并已自动保存至系统！"
-        # }
-    # except Exception as e:
-        # return {"status": "error", "message": f"执行异常: {str(e)}"}
-
-# @app.post("/api/config/sync_cf_domains")
-# async def sync_cf_domains_api(req: CFSyncExistingReq, token: str = Depends(verify_token)):
-    # try:
-        # sub_list = [d.strip() for d in req.sub_domains.split(",") if d.strip()]
-        # if not sub_list:
-            # return {"status": "error", "message": "没有需要同步的域名"}
-
-        # cf_cfg = getattr(core_engine.cfg, '_c', {})
-        # configured_main_domains = [d.strip() for d in cf_cfg.get("mail_domains", "").split(",") if d.strip()]
-        # cf = Cloudflare(api_email=req.api_email, api_key=req.api_key)
-
-        # main_domains_map = {}
-        # for sub in sub_list:
-            # for main in configured_main_domains:
-                # if sub.endswith(main):
-                    # main_domains_map.setdefault(main, []).append(sub)
-                    # break
-
-        # def create_dns_record(zone_id, name):
-            # try:
-                # cf.email_routing.dns.create(zone_id=zone_id, name=name)
-            # except Exception:
-                # pass 
-
-            # dispatch_email_backend_add(name, cf_cfg)
-            # return True
-
-        # all_tasks = []
-        # for main_dom, subs in main_domains_map.items():
-            # zones = await asyncio.to_thread(cf.zones.list, name=main_dom)
-            # if not zones.result: continue
-            # zone_id = zones.result[0].id
-            
-            # for full_sub in subs:
-                # all_tasks.append(asyncio.to_thread(create_dns_record, zone_id, full_sub))
-
-        # success_count = 0
-        # if all_tasks:
-            # results = await asyncio.gather(*all_tasks)
-            # success_count = sum(1 for r in results if r)
-        
-        # return {
-            # "status": "success", 
-            # "message": f"🚀 同步完成！成功处理了 {success_count} 个域名的路由与后端下发。"
-        # }
-    # except Exception as e:
-        # return {"status": "error", "message": f"执行异常: {str(e)}"}
+        return {"status": "error", "message": f"执行外层异常: {str(e)}"}
         
 @app.get("/api/config/cf_global_status")
 def get_cf_global_status(main_domain: str, token: str = Depends(verify_token)):
