@@ -973,7 +973,7 @@
                                         <div><label class="form-label text-[11px] md:text-sm">巡检间隔(分)</label><input type="number" v-model.number="config.cpa_mode.check_interval_minutes" class="form-input text-sm"></div>
                                         <div><label class="form-label text-[11px] md:text-sm">测活并发数</label><input type="number" v-model.number="config.cpa_mode.threads" class="form-input text-sm"></div>
 
-                                        <div class="col-span-2 bg-red-50 p-3 md:p-5 rounded-xl border border-red-100 mt-1 md:mt-2 flex flex-col md:flex-row gap-4 md:gap-6">
+                                        <div class="col-span-2 bg-red-50 p-3 md:p-5 rounded-xl border border-red-100 mt-1 md:mt-2 flex flex-col md:flex-row gap-4 md:gap-6" data-mode="cpa">
                                             <div class="w-full md:w-1/3">
                                                 <label class="form-label text-red-800 font-bold text-xs md:text-sm">周限额剔除阈值(%)</label>
                                                 <input type="number" v-model.number="config.cpa_mode.min_remaining_weekly_percent" class="form-input border-red-300 font-black text-red-600 text-base md:text-xl text-center">
@@ -1034,12 +1034,69 @@
                                         <div><label class="form-label text-[11px] md:text-sm">巡检间隔(分)</label><input type="number" v-model.number="config.sub2api_mode.check_interval_minutes" class="form-input text-sm"></div>
                                         <div><label class="form-label text-[11px] md:text-sm">测活并发数</label><input type="number" v-model.number="config.sub2api_mode.threads" class="form-input text-sm"></div>
 
-                                        <div class="col-span-2 bg-red-50 p-3 md:p-5 rounded-xl border border-red-100 mt-1 md:mt-2 flex flex-col md:flex-row gap-4 md:gap-6">
-                                            <div class="w-full md:w-1/3">
-                                                <label class="form-label text-red-800 font-bold text-xs md:text-sm">周限额剔除阈值(%)</label>
-                                                <input type="number" v-model.number="config.sub2api_mode.min_remaining_weekly_percent" class="form-input border-red-300 font-black text-red-600 text-base md:text-xl text-center">
+                                        <div class="col-span-2 bg-purple-50 p-4 md:p-5 rounded-xl border border-purple-200 mt-1 space-y-4">
+                                            <h4 class="text-xs md:text-sm font-bold text-purple-800 flex items-center gap-2 pb-2 border-b border-purple-200">
+                                                <span>✨</span> 新账号推送参数
+                                            </h4>
+
+                                            <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+                                                <div>
+                                                    <label class="form-label text-[10px] md:text-xs text-purple-700 font-bold">并发数</label>
+                                                    <span class="text-[9px] text-purple-400 block mb-1">账号并发上限</span>
+                                                    <input type="number" min="1" v-model.number="config.sub2api_mode.account_concurrency" class="form-input border-purple-200 text-sm mb-0 font-mono">
+                                                </div>
+                                                <div>
+                                                    <label class="form-label text-[10px] md:text-xs text-purple-700 font-bold">负载因子</label>
+                                                    <span class="text-[9px] text-purple-400 block mb-1">提高账号调度频率</span>
+                                                    <input type="number" min="1" v-model.number="config.sub2api_mode.account_load_factor" class="form-input border-purple-200 text-sm mb-0 font-mono">
+                                                </div>
+                                                <div>
+                                                    <label class="form-label text-[10px] md:text-xs text-purple-700 font-bold">优先级</label>
+                                                    <span class="text-[9px] text-purple-400 block mb-1">数值越小越优先使用</span>
+                                                    <input type="number" min="1" v-model.number="config.sub2api_mode.account_priority" class="form-input border-purple-200 text-sm mb-0 font-mono">
+                                                </div>
+                                                <div>
+                                                    <label class="form-label text-[10px] md:text-xs text-purple-700 font-bold">账号计费倍率</label>
+                                                    <span class="text-[9px] text-purple-400 block mb-1">0 = 不计费</span>
+                                                    <input type="number" step="0.1" min="0" v-model.number="config.sub2api_mode.account_rate_multiplier" class="form-input border-purple-200 text-sm mb-0 font-mono">
+                                                </div>
                                             </div>
-                                            <div class="w-full md:w-2/3 flex flex-col justify-center space-y-2 md:space-y-3">
+
+                                            <div>
+                                                <label class="form-label text-[10px] md:text-xs text-purple-700 font-bold">WS mode</label>
+                                                <p class="text-[9px] text-purple-400 mb-1.5">仅对 OpenAI OAuth 账号生效。启用后并发数将作为该账号 WS 连接池上限。</p>
+                                                <select v-model="config.sub2api_mode.enable_ws_mode" class="form-input border-purple-200 bg-white font-bold text-purple-800 text-sm mb-0 max-w-xs">
+                                                    <option :value="false">关闭 (off)</option>
+                                                    <option :value="true">透传 (passthrough)</option>
+                                                </select>
+                                            </div>
+
+                                            <div>
+                                                <div class="flex items-center gap-2 mb-2">
+                                                    <label class="form-label text-[10px] md:text-xs text-purple-700 font-bold mb-0">绑定分组</label>
+                                                    <button @click="fetchSub2ApiGroups" :disabled="isLoadingSub2APIGroups"
+                                                            class="px-2.5 py-1 bg-purple-600 text-white text-[10px] md:text-xs font-bold rounded-lg hover:bg-purple-700 transition flex items-center gap-1 disabled:opacity-50 shadow-sm">
+                                                        <span :class="{'animate-spin inline-block': isLoadingSub2APIGroups}">{{ isLoadingSub2APIGroups ? '🔄' : '🔍' }}</span>
+                                                        {{ isLoadingSub2APIGroups ? '获取中...' : '获取分组' }}
+                                                    </button>
+                                                    <span v-if="config.sub2api_mode.account_group_ids" class="text-[10px] text-purple-500 font-mono bg-purple-100 rounded px-2 py-0.5">
+                                                        已选: {{ config.sub2api_mode.account_group_ids }}
+                                                    </span>
+                                                </div>
+                                                <div v-if="sub2apiGroups.length > 0" class="flex flex-wrap gap-2">
+                                                    <label v-for="group in sub2apiGroups" :key="group.id"
+                                                           class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border cursor-pointer transition text-xs font-bold select-none"
+                                                           :class="isGroupSelected(group.id) ? 'bg-purple-600 text-white border-purple-600 shadow-sm' : 'bg-white text-purple-700 border-purple-300 hover:bg-purple-50'">
+                                                        <input type="checkbox" class="sr-only" @change="toggleGroup(group.id)">
+                                                        {{ group.name }}
+                                                    </label>
+                                                </div>
+                                                <p v-else class="text-[10px] text-gray-400 italic">填写接口地址和 API Key 并保存后，点击「获取分组」</p>
+                                            </div>
+                                        </div>
+
+                                        <div class="col-span-2 bg-red-50 p-3 md:p-5 rounded-xl border border-red-100 mt-1 md:mt-2 flex flex-col gap-3">
+                                            <div class="flex flex-col md:flex-row gap-3">
                                                 <label class="form-checkbox-label text-red-800 mb-0 bg-white p-1.5 md:p-2 rounded border border-red-100 items-center">
                                                     <input type="checkbox" v-model="config.sub2api_mode.remove_on_limit_reached" class="form-checkbox m-0 text-red-600">
                                                     <span class="text-[11px] md:text-sm font-bold ml-2">耗尽自动物理删除</span>
@@ -1052,11 +1109,11 @@
                                                     <input type="checkbox" v-model="config.sub2api_mode.enable_token_revive" class="form-checkbox m-0 text-blue-600">
                                                     <span class="text-[11px] md:text-sm font-bold ml-2">尝试 Token 复活</span>
                                                 </label>
-                                                <label class="form-checkbox-label text-cyan-800 mb-0 bg-cyan-50 p-1.5 md:p-2 rounded border border-cyan-100 items-center">
-                                                    <input type="checkbox" v-model="config.sub2api_mode.auto_check" class="form-checkbox m-0 text-cyan-600">
-                                                    <span class="text-[11px] md:text-sm font-bold ml-2">补货前自动巡检测活</span>
-                                                </label>
                                             </div>
+                                            <label class="form-checkbox-label text-cyan-800 mb-0 bg-cyan-50 p-1.5 md:p-2 rounded border border-cyan-100 items-center">
+                                                <input type="checkbox" v-model="config.sub2api_mode.auto_check" class="form-checkbox m-0 text-cyan-600">
+                                                <span class="text-[11px] md:text-sm font-bold ml-2">补货前自动巡检测活</span>
+                                            </label>
                                         </div>
                                     </div>
                                 </div>

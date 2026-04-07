@@ -188,12 +188,18 @@ sub2api_mode:
   api_key: 
   min_accounts_threshold: 20
   batch_reg_count: 1
-  min_remaining_weekly_percent: 80
   remove_on_limit_reached: true
   remove_dead_accounts: true
   enable_token_revive: false
   check_interval_minutes: 60
   threads: 10
+  # Push settings for manually sending accounts to Sub2API
+  account_concurrency: 10
+  account_load_factor: 10
+  account_priority: 1
+  account_rate_multiplier: 1.0
+  account_group_ids: ""
+  enable_ws_mode: true
 
 hero_sms:
   enabled: false
@@ -221,4 +227,4 @@ web_password: admin
 #CF账号
 cf_api_email: 
 #CF KEY
-cf_api_key: 
+cf_api_key:

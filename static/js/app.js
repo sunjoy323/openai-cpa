@@ -71,7 +71,9 @@ createApp({
             toasts: [],
             toastId: 0,
             confirmModal: { show: false, message: '', resolve: null },
-            updateInfo: { hasUpdate: false, version: '', url: '', changelog: '' }
+            updateInfo: { hasUpdate: false, version: '', url: '', changelog: '' },
+            sub2apiGroups: [],
+            isLoadingSub2APIGroups: false
         };
     },
     mounted() {
@@ -177,6 +179,27 @@ createApp({
 				
 				if (!this.config.sub_domain_level) {
                     this.config.sub_domain_level = 1;
+                }
+                if (!this.config.sub2api_mode) {
+                    this.config.sub2api_mode = {};
+                }
+                if (this.config.sub2api_mode.account_concurrency === undefined) {
+                    this.config.sub2api_mode.account_concurrency = 10;
+                }
+                if (this.config.sub2api_mode.account_load_factor === undefined) {
+                    this.config.sub2api_mode.account_load_factor = 10;
+                }
+                if (this.config.sub2api_mode.account_priority === undefined) {
+                    this.config.sub2api_mode.account_priority = 1;
+                }
+                if (this.config.sub2api_mode.account_rate_multiplier === undefined) {
+                    this.config.sub2api_mode.account_rate_multiplier = 1.0;
+                }
+                if (this.config.sub2api_mode.account_group_ids === undefined) {
+                    this.config.sub2api_mode.account_group_ids = '';
+                }
+                if (this.config.sub2api_mode.enable_ws_mode === undefined) {
+                    this.config.sub2api_mode.enable_ws_mode = true;
                 }
                 if(this.config.clash_proxy_pool && Array.isArray(this.config.clash_proxy_pool.blacklist)) {
                     this.blacklistStr = this.config.clash_proxy_pool.blacklist.join('\n');
@@ -789,6 +812,59 @@ createApp({
             } finally {
                 this.isManualBuying = false;
             }
+        },
+        async fetchSub2ApiGroups() {
+            if (!this.config || !this.config.sub2api_mode) return;
+            if (!this.config.sub2api_mode.api_url || !this.config.sub2api_mode.api_key) {
+                this.showToast('Please save the Sub2API URL and API key first.', 'warning');
+                return;
+            }
+
+            this.isLoadingSub2APIGroups = true;
+            try {
+                const res = await this.authFetch('/api/sub2api/groups');
+                const data = await res.json();
+                if (data.status === 'success') {
+                    const raw = data.data;
+                    let groups = [];
+                    if (Array.isArray(raw)) groups = raw;
+                    else if (raw && Array.isArray(raw.list)) groups = raw.list;
+                    else if (raw && Array.isArray(raw.data)) groups = raw.data;
+
+                    this.sub2apiGroups = groups;
+                    if (groups.length === 0) {
+                        this.showToast('No Sub2API groups found. Create one in Sub2API first.', 'warning');
+                    } else {
+                        this.showToast(`Fetched ${groups.length} Sub2API groups.`, 'success');
+                    }
+                } else {
+                    this.showToast(data.message || 'Failed to fetch Sub2API groups.', 'error');
+                }
+            } catch (e) {
+                this.showToast('Group fetch error: ' + e.message, 'error');
+            } finally {
+                this.isLoadingSub2APIGroups = false;
+            }
+        },
+        isGroupSelected(id) {
+            if (!this.config || !this.config.sub2api_mode) return false;
+            const ids = String(this.config.sub2api_mode.account_group_ids || '')
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s);
+            return ids.includes(String(id));
+        },
+        toggleGroup(id) {
+            if (!this.config || !this.config.sub2api_mode) return;
+            const ids = String(this.config.sub2api_mode.account_group_ids || '')
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s);
+            const value = String(id);
+            const index = ids.indexOf(value);
+            if (index >= 0) ids.splice(index, 1);
+            else ids.push(value);
+            this.config.sub2api_mode.account_group_ids = ids.join(',');
         },
         async startManualCheck() {
             if(this.isRunning) {

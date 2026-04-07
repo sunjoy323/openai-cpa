@@ -263,12 +263,16 @@ async def get_config(token: str = Depends(verify_token)):
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f) or {}
+    if isinstance(config_data.get("sub2api_mode"), dict):
+        config_data["sub2api_mode"].pop("min_remaining_weekly_percent", None)
     config_data["web_password"] = config_data.get("web_password", "admin")
     return config_data
 
 @app.post("/api/config")
 async def save_config(new_config: dict, token: str = Depends(verify_token)):
     try:
+        if isinstance(new_config.get("sub2api_mode"), dict):
+            new_config["sub2api_mode"].pop("min_remaining_weekly_percent", None)
         with core_engine.cfg.CONFIG_FILE_LOCK:
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 yaml.dump(new_config, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
@@ -726,6 +730,33 @@ async def start_check_api(token: str = Depends(verify_token)):
     args = DummyArgs(proxy=default_proxy if default_proxy else None)
     engine.start_check(args)
     return {"code": 200, "message": "独立测活指令已下发！"}
+
+@app.get("/api/sub2api/groups")
+async def get_sub2api_groups(token: str = Depends(verify_token)):
+    from curl_cffi import requests as cffi_requests
+
+    sub2api_url = getattr(core_engine.cfg, "SUB2API_URL", "").strip()
+    sub2api_key = getattr(core_engine.cfg, "SUB2API_KEY", "").strip()
+    if not sub2api_url or not sub2api_key:
+        return {"status": "error", "message": "Please save the Sub2API URL and API key first."}
+
+    try:
+        response = cffi_requests.get(
+            f"{sub2api_url.rstrip('/')}/api/v1/admin/groups/all",
+            headers={"x-api-key": sub2api_key, "Content-Type": "application/json"},
+            timeout=10,
+            impersonate="chrome110",
+        )
+        if response.status_code != 200:
+            return {"status": "error", "message": f"HTTP {response.status_code}: {response.text[:200]}"}
+
+        payload = response.json()
+        groups = payload.get("data", [])
+        if not isinstance(groups, list):
+            groups = []
+        return {"status": "success", "data": groups}
+    except Exception as exc:
+        return {"status": "error", "message": f"Failed to fetch Sub2API groups: {exc}"}
 
 if __name__ == "__main__":
     try: reload_all_configs()

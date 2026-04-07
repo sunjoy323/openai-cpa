@@ -135,11 +135,16 @@ SUB2API_BATCH_COUNT: int = 2
 SUB2API_CHECK_INTERVAL: int = 60
 SUB2API_THREADS: int = 10
 SUB2API_SAVE_TO_LOCAL: bool = True
-SUB2API_MIN_REMAINING_WEEKLY_PERCENT: int = 80
 SUB2API_REMOVE_ON_LIMIT_REACHED: bool = True
 SUB2API_REMOVE_DEAD_ACCOUNTS: bool = True
 SUB2API_ENABLE_TOKEN_REVIVE: bool = False
 SUB2API_AUTO_CHECK: bool = True
+SUB2API_ACCOUNT_CONCURRENCY: int = 10
+SUB2API_ACCOUNT_LOAD_FACTOR: int = 10
+SUB2API_ACCOUNT_PRIORITY: int = 1
+SUB2API_ACCOUNT_RATE_MULTIPLIER: float = 1.0
+SUB2API_ACCOUNT_GROUP_IDS: list = []
+SUB2API_ENABLE_WS_MODE: bool = True
 
 
 LUCKMAIL_PREFERRED_DOMAIN: str = ""
@@ -196,14 +201,59 @@ def reload_all_configs():
     global _clash_enable, _clash_pool_mode, WARP_PROXY_LIST, PROXY_QUEUE
     global ENABLE_SUB2API_MODE, SUB2API_URL, SUB2API_KEY
     global SUB2API_MIN_THRESHOLD, SUB2API_BATCH_COUNT, SUB2API_CHECK_INTERVAL, SUB2API_THREADS
-    global SUB2API_SAVE_TO_LOCAL, SUB2API_MIN_REMAINING_WEEKLY_PERCENT
+    global SUB2API_SAVE_TO_LOCAL
     global SUB2API_REMOVE_ON_LIMIT_REACHED, SUB2API_REMOVE_DEAD_ACCOUNTS, SUB2API_ENABLE_TOKEN_REVIVE
+    global SUB2API_ACCOUNT_CONCURRENCY, SUB2API_ACCOUNT_LOAD_FACTOR, SUB2API_ACCOUNT_PRIORITY
+    global SUB2API_ACCOUNT_RATE_MULTIPLIER, SUB2API_ACCOUNT_GROUP_IDS, SUB2API_ENABLE_WS_MODE
     global LUCKMAIL_API_KEY,LUCKMAIL_PREFERRED_DOMAIN,LUCKMAIL_EMAIL_TYPE,LUCKMAIL_VARIANT_MODE,LUCKMAIL_REUSE_PURCHASED, LUCKMAIL_TAG_ID
     global HERO_SMS_ENABLED, HERO_SMS_API_KEY, HERO_SMS_BASE_URL, HERO_SMS_COUNTRY, HERO_SMS_SERVICE
     global HERO_SMS_AUTO_PICK_COUNTRY, HERO_SMS_REUSE_PHONE, HERO_SMS_MAX_PRICE
     global HERO_SMS_MIN_BALANCE, HERO_SMS_MAX_TRIES, HERO_SMS_POLL_TIMEOUT_SEC
     global AI_API_BASE, AI_API_KEY, AI_MODEL, AI_ENABLE_PROFILE
     global CPA_AUTO_CHECK, SUB2API_AUTO_CHECK
+
+    def safe_int(value, default, minimum=None):
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            parsed = default
+        if minimum is not None:
+            return max(minimum, parsed)
+        return parsed
+
+    def safe_float(value, default, minimum=None):
+        try:
+            parsed = float(str(value).strip())
+        except (TypeError, ValueError):
+            parsed = default
+        if minimum is not None:
+            return max(minimum, parsed)
+        return parsed
+
+    def safe_bool(value, default=False):
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    def parse_group_ids(raw_value):
+        if isinstance(raw_value, list):
+            raw_items = raw_value
+        else:
+            raw_items = str(raw_value or "").split(",")
+
+        group_ids = []
+        for item in raw_items:
+            text = str(item).strip()
+            if text.isdigit():
+                group_ids.append(int(text))
+        return group_ids
 
     _c = init_config()
 
@@ -266,11 +316,16 @@ def reload_all_configs():
     SUB2API_CHECK_INTERVAL = _sub2api.get("check_interval_minutes", 60)
     SUB2API_THREADS     = _sub2api.get("threads", 10)
     SUB2API_SAVE_TO_LOCAL = _sub2api.get("save_to_local", True)
-    SUB2API_MIN_REMAINING_WEEKLY_PERCENT = _sub2api.get("min_remaining_weekly_percent", 80)
     SUB2API_REMOVE_ON_LIMIT_REACHED = _sub2api.get("remove_on_limit_reached", True)
     SUB2API_REMOVE_DEAD_ACCOUNTS = _sub2api.get("remove_dead_accounts", True)
     SUB2API_ENABLE_TOKEN_REVIVE = _sub2api.get("enable_token_revive", False)
     SUB2API_AUTO_CHECK = _sub2api.get("auto_check", True)
+    SUB2API_ACCOUNT_CONCURRENCY = safe_int(_sub2api.get("account_concurrency", 10), 10, minimum=1)
+    SUB2API_ACCOUNT_LOAD_FACTOR = safe_int(_sub2api.get("account_load_factor", 10), 10, minimum=1)
+    SUB2API_ACCOUNT_PRIORITY = safe_int(_sub2api.get("account_priority", 1), 1, minimum=1)
+    SUB2API_ACCOUNT_RATE_MULTIPLIER = safe_float(_sub2api.get("account_rate_multiplier", 1.0), 1.0, minimum=0.0)
+    SUB2API_ACCOUNT_GROUP_IDS = parse_group_ids(_sub2api.get("account_group_ids", ""))
+    SUB2API_ENABLE_WS_MODE = safe_bool(_sub2api.get("enable_ws_mode", True), default=True)
 
     _normal          = _c.get("normal_mode", {})
     NORMAL_SLEEP_MIN = _normal.get("sleep_min", 5)
