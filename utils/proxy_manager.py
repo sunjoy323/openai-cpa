@@ -6,6 +6,7 @@ from datetime import datetime
 import yaml
 import os
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 CLASH_API_URL = ""
@@ -17,6 +18,10 @@ PROXY_GROUP_NAME = "节点选择"
 CLASH_SECRET = ""
 NODE_BLACKLIST = []
 _IS_IN_DOCKER = os.path.exists('/.dockerenv')
+_global_switch_lock = threading.Lock()
+_last_switch_time = 0
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(CURRENT_DIR)
 
 def format_docker_url(url: str) -> str:
     """智能检测：如果在 Docker 中运行，自动把 127.0.0.1 转为宿主机魔法地址"""
@@ -32,8 +37,8 @@ def format_docker_url(url: str) -> str:
 def reload_proxy_config():
     global CLASH_API_URL, LOCAL_PROXY_URL, ENABLE_NODE_SWITCH, POOL_MODE, \
            FASTEST_MODE, PROXY_GROUP_NAME, CLASH_SECRET, NODE_BLACKLIST
-
-    config_path = "config.yaml"
+    config_dir = os.path.join(BASE_DIR, "data")
+    config_path = os.path.join(config_dir, "config.yaml")
     if not os.path.exists(config_path):
         print(f"[{ts()}] [WARNING] 配置文件 {config_path} 不存在，使用默认代理设置。")
         conf_data = {}
@@ -122,7 +127,27 @@ def test_proxy_liveness(proxy_url=None):
         print(f"[{ts()}] [代理测活] {display_name} 链路中断或超时。")
         return False
 
+
 def smart_switch_node(proxy_url=None):
+    global _last_switch_time
+    if not ENABLE_NODE_SWITCH:
+        return True
+
+    # 如果是独立代理池模式，互相不影响，不需要锁
+    if POOL_MODE and proxy_url:
+        return _do_smart_switch(proxy_url)
+
+    with _global_switch_lock:
+        if time.time() - _last_switch_time < 10:
+            print(f"[{ts()}] [代理池] 其他线程刚完成切换，跳过本次请求...")
+            return True
+
+        success = _do_smart_switch(proxy_url)
+        if success:
+            _last_switch_time = time.time()
+        return success
+
+def _do_smart_switch(proxy_url=None):
     """智能切换节点并测活的核心逻辑 (脱敏)"""
     if not ENABLE_NODE_SWITCH:
         return True

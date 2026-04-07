@@ -4,14 +4,17 @@ import threading
 import yaml
 import random
 import string
+import shutil
 from datetime import datetime
-
+from typing import Optional
 from utils.proxy_manager import reload_proxy_config
 
-
+CONFIG_FILE_LOCK = threading.Lock()
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(CURRENT_DIR)
+CONFIG_PATH = os.path.join(BASE_DIR, "data", "config.yaml")
 def ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
-
 
 def format_docker_url(url: str) -> str:
     if not url or not isinstance(url, str):
@@ -21,19 +24,63 @@ def format_docker_url(url: str) -> str:
         url = url.replace("localhost", "host.docker.internal")
     return url
 
+def deep_update_config(default_dict, user_dict):
+    """
+    递归检查配置文件
+    """
+    updated = False
+    for key, value in default_dict.items():
+        if key not in user_dict:
+            user_dict[key] = value
+            updated = True
+        elif isinstance(value, dict) and isinstance(user_dict[key], dict):
+            if deep_update_config(value, user_dict[key]):
+                updated = True
+    return updated
 
 def init_config():
-    config_path = "config.yaml"
+    # 配置文件路径放到data 目录下
+    config_dir = os.path.join(BASE_DIR, "data")
+    config_path = os.path.join(config_dir, "config.yaml")
+    template_path = os.path.join(BASE_DIR, "config.example.yaml")
+
+    os.makedirs(config_dir, exist_ok=True)
     if not os.path.exists(config_path):
-        print(f"[{ts()}] [ERROR] 配置文件 {config_path} 不存在，请检查！")
-        exit(1)
+        if os.path.exists(template_path):
+            print(f"[{ts()}] [系统] 未检测到 {config_path}，正在从模板自动生成...")
+            try:
+                shutil.copyfile(template_path, config_path)
+                print(f"[{ts()}] [SUCCESS] 配置文件初始化成功！程序已加载默认配置。")
+            except PermissionError:
+                print(f"[{ts()}] [ERROR] 权限不足，无法在 {config_dir} 目录创建配置。请检查 Docker 目录权限。")
+                exit(1)
+            except Exception as e:
+                print(f"[{ts()}] [ERROR] 自动生成配置文件失败: {e}")
+                exit(1)
+        else:
+            print(f"[{ts()}] [ERROR] 缺少核心模板文件 {template_path}，无法启动！")
+            exit(1)
+
     with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        user_config = yaml.safe_load(f) or {}
+    if os.path.exists(template_path):
+        with open(template_path, "r", encoding="utf-8") as f:
+            default_config = yaml.safe_load(f) or {}
+
+        if deep_update_config(default_config, user_config):
+            print(f"[{ts()}] [系统] 🛠️ 检测到旧版配置缺失新参数，已自动补齐并生效！")
+            try:
+                with CONFIG_FILE_LOCK:
+                    with open(config_path, "w", encoding="utf-8") as f:
+                        yaml.dump(user_config, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
+            except Exception as e:
+                print(f"[{ts()}] [WARNING] 自动补全配置文件写入失败: {e}")
+
+    return user_config
 
 _c: dict = {}
 ENABLE_SUB_DOMAINS: bool = False
 SUB_DOMAIN_COUNT: int = 10
-SUB_DOMAINS_LIST: str = ""
 EMAIL_API_MODE: str = ""
 MAIL_DOMAINS: str = ""
 GPTMAIL_BASE: str = ""
@@ -75,9 +122,11 @@ MIN_REMAINING_WEEKLY_PERCENT: int = 80
 REMOVE_ON_LIMIT_REACHED: bool = False
 REMOVE_DEAD_ACCOUNTS: bool = False
 CPA_THREADS: int = 10
+CPA_AUTO_CHECK: bool = True
 CHECK_INTERVAL_MINUTES: int = 60
 ENABLE_TOKEN_REVIVE: bool = False
-
+SUB_DOMAIN_LEVEL: int = 1
+RANDOM_SUB_DOMAIN_LEVEL: bool = False
 ENABLE_SUB2API_MODE: bool = False
 SUB2API_URL: str = ""
 SUB2API_KEY: str = ""
@@ -90,28 +139,52 @@ SUB2API_MIN_REMAINING_WEEKLY_PERCENT: int = 80
 SUB2API_REMOVE_ON_LIMIT_REACHED: bool = True
 SUB2API_REMOVE_DEAD_ACCOUNTS: bool = True
 SUB2API_ENABLE_TOKEN_REVIVE: bool = False
+SUB2API_AUTO_CHECK: bool = True
+
+
+LUCKMAIL_PREFERRED_DOMAIN: str = ""
+LUCKMAIL_EMAIL_TYPE: str = ""
+LUCKMAIL_VARIANT_MODE: str = ""
+LUCKMAIL_REUSE_PURCHASED: bool = False
+LUCKMAIL_TAG_ID: Optional[int] = None
+HERO_SMS_ENABLED: bool = False
+HERO_SMS_API_KEY: str = ""
+HERO_SMS_BASE_URL: str = "https://hero-sms.com/stubs/handler_api.php"
+HERO_SMS_COUNTRY: str = "US"
+HERO_SMS_SERVICE: str = "openai"
+HERO_SMS_AUTO_PICK_COUNTRY: bool = False
+HERO_SMS_REUSE_PHONE: bool = True
+HERO_SMS_MAX_PRICE: float = 2.0
+HERO_SMS_MIN_BALANCE: float = 2.0
+HERO_SMS_MAX_TRIES: int = 3
+HERO_SMS_POLL_TIMEOUT_SEC: int = 120
+
 
 NORMAL_SLEEP_MIN: int = 5
 NORMAL_SLEEP_MAX: int = 30
 NORMAL_TARGET_COUNT: int = 0
-
-SUB_DOMAIN_FAIL_THRESHOLD = 3
-SUB_DOMAIN_REFILL_COUNT = 1
 
 _clash_enable: bool = False
 _clash_pool_mode: bool = False
 WARP_PROXY_LIST: list = []
 PROXY_QUEUE: queue.Queue = queue.Queue()
 
+AI_API_BASE: str = ""
+AI_API_KEY: str = ""
+AI_MODEL: str = "gpt-3.5-turbo"
+AI_ENABLE_PROFILE: bool = False
+
+
 def reload_all_configs():
     global _c
     global EMAIL_API_MODE, MAIL_DOMAINS, GPTMAIL_BASE, ADMIN_AUTH
-    global ENABLE_SUB_DOMAINS, SUB_DOMAIN_COUNT, SUB_DOMAINS_LIST
+    global ENABLE_SUB_DOMAINS, SUB_DOMAIN_COUNT
     global IMAP_SERVER, IMAP_PORT, IMAP_USER, IMAP_PASS
     global FREEMAIL_API_URL, FREEMAIL_API_TOKEN
     global CM_API_URL, CM_ADMIN_EMAIL, CM_ADMIN_PASS
     global MC_API_BASE, MC_KEY
     global DEFAULT_PROXY
+    global SUB_DOMAIN_LEVEL,RANDOM_SUB_DOMAIN_LEVEL
     global ENABLE_MULTI_THREAD_REG, REG_THREADS, MAX_OTP_RETRIES
     global USE_PROXY_FOR_EMAIL, ENABLE_EMAIL_MASKING
     global LOGIN_DELAY_MIN, LOGIN_DELAY_MAX
@@ -125,9 +198,13 @@ def reload_all_configs():
     global SUB2API_MIN_THRESHOLD, SUB2API_BATCH_COUNT, SUB2API_CHECK_INTERVAL, SUB2API_THREADS
     global SUB2API_SAVE_TO_LOCAL, SUB2API_MIN_REMAINING_WEEKLY_PERCENT
     global SUB2API_REMOVE_ON_LIMIT_REACHED, SUB2API_REMOVE_DEAD_ACCOUNTS, SUB2API_ENABLE_TOKEN_REVIVE
-    global LUCKMAIL_API_KEY,LUCKMAIL_PREFERRED_DOMAIN
-    global SUB_DOMAIN_FAIL_THRESHOLD, SUB_DOMAIN_REFILL_COUNT
-    
+    global LUCKMAIL_API_KEY,LUCKMAIL_PREFERRED_DOMAIN,LUCKMAIL_EMAIL_TYPE,LUCKMAIL_VARIANT_MODE,LUCKMAIL_REUSE_PURCHASED, LUCKMAIL_TAG_ID
+    global HERO_SMS_ENABLED, HERO_SMS_API_KEY, HERO_SMS_BASE_URL, HERO_SMS_COUNTRY, HERO_SMS_SERVICE
+    global HERO_SMS_AUTO_PICK_COUNTRY, HERO_SMS_REUSE_PHONE, HERO_SMS_MAX_PRICE
+    global HERO_SMS_MIN_BALANCE, HERO_SMS_MAX_TRIES, HERO_SMS_POLL_TIMEOUT_SEC
+    global AI_API_BASE, AI_API_KEY, AI_MODEL, AI_ENABLE_PROFILE
+    global CPA_AUTO_CHECK, SUB2API_AUTO_CHECK
+
     _c = init_config()
 
     EMAIL_API_MODE   = _c.get("email_api_mode", "cloudflare_temp_email")
@@ -178,6 +255,7 @@ def reload_all_configs():
     CPA_THREADS      = _cpa.get("threads", 10)
     CHECK_INTERVAL_MINUTES  = _cpa.get("check_interval_minutes", 60)
     ENABLE_TOKEN_REVIVE     = _cpa.get("enable_token_revive", False)
+    CPA_AUTO_CHECK = _cpa.get("auto_check", True)
 
     _sub2api = _c.get("sub2api_mode", {})
     ENABLE_SUB2API_MODE = _sub2api.get("enable", False)
@@ -192,6 +270,7 @@ def reload_all_configs():
     SUB2API_REMOVE_ON_LIMIT_REACHED = _sub2api.get("remove_on_limit_reached", True)
     SUB2API_REMOVE_DEAD_ACCOUNTS = _sub2api.get("remove_dead_accounts", True)
     SUB2API_ENABLE_TOKEN_REVIVE = _sub2api.get("enable_token_revive", False)
+    SUB2API_AUTO_CHECK = _sub2api.get("auto_check", True)
 
     _normal          = _c.get("normal_mode", {})
     NORMAL_SLEEP_MIN = _normal.get("sleep_min", 5)
@@ -213,16 +292,56 @@ def reload_all_configs():
     _luckmail        = _c.get("luckmail", {})
     LUCKMAIL_API_KEY = _luckmail.get("api_key", "")
     LUCKMAIL_PREFERRED_DOMAIN = _luckmail.get("preferred_domain", "")
-    
-    ENABLE_SUB_DOMAINS = _c.get("enable_sub_domains", False)
-    SUB_DOMAINS_LIST = _c.get("sub_domains_list", "")
+    LUCKMAIL_EMAIL_TYPE = str(_luckmail.get("email_type") or "ms_graph").strip()
+    LUCKMAIL_VARIANT_MODE = str(_luckmail.get("variant_mode") or "").strip()
+    LUCKMAIL_REUSE_PURCHASED = bool(_luckmail.get("reuse_purchased", False))
+    _raw_tag_id = _luckmail.get("tag_id")
+    try:
+        LUCKMAIL_TAG_ID = int(_raw_tag_id) if _raw_tag_id else None
+    except (ValueError, TypeError):
+        LUCKMAIL_TAG_ID = None
 
-    if EMAIL_API_MODE in ["imap", "freemail", "cloudflare_temp_email", "cloudmail"] and ENABLE_SUB_DOMAINS and SUB_DOMAINS_LIST:
-        MAIL_DOMAINS = SUB_DOMAINS_LIST
-    else:
-        MAIL_DOMAINS = MAIL_DOMAINS
-    SUB_DOMAIN_FAIL_THRESHOLD = _c.get("sub_domain_fail_threshold", 3)
-    SUB_DOMAIN_REFILL_COUNT = _c.get("sub_domain_refill_count", 1)
+    SUB_DOMAIN_LEVEL = _c.get("sub_domain_level", 1)
+    RANDOM_SUB_DOMAIN_LEVEL = _c.get("random_sub_domain_level", False)
+    ENABLE_SUB_DOMAINS = _c.get("enable_sub_domains", False)
+
+    _hero_sms_conf = _c.get("hero_sms", {})
+    HERO_SMS_ENABLED = _hero_sms_conf.get("enabled", False)
+    HERO_SMS_API_KEY = _hero_sms_conf.get("api_key", "")
+    HERO_SMS_BASE_URL = _hero_sms_conf.get("base_url", "https://hero-sms.com/stubs/handler_api.php")
+    HERO_SMS_COUNTRY = _hero_sms_conf.get("country", "US")
+    HERO_SMS_SERVICE = _hero_sms_conf.get("service", "dr")
+    HERO_SMS_AUTO_PICK_COUNTRY = _hero_sms_conf.get("auto_pick_country", False)
+    HERO_SMS_REUSE_PHONE = _hero_sms_conf.get("reuse_phone", True)
+
+    try:
+        HERO_SMS_MAX_PRICE = float(_hero_sms_conf.get("max_price", 2.0))
+    except:
+        HERO_SMS_MAX_PRICE = 2.0
+
+    try:
+        HERO_SMS_MIN_BALANCE = float(_hero_sms_conf.get("min_balance", 2.0))
+    except:
+        HERO_SMS_MIN_BALANCE = 2.0
+
+    try:
+        HERO_SMS_MAX_TRIES = int(_hero_sms_conf.get("max_tries", 3))
+    except:
+        HERO_SMS_MAX_TRIES = 3
+
+    try:
+        HERO_SMS_POLL_TIMEOUT_SEC = int(_hero_sms_conf.get("poll_timeout_sec", 120))
+    except:
+        HERO_SMS_POLL_TIMEOUT_SEC = 120
+
+
+    _ai = _c.get("ai_service", {})
+    AI_API_BASE = _ai.get("api_base", "https://api.openai.com/v1")
+    AI_API_KEY = _ai.get("api_key", "")
+    AI_MODEL = _ai.get("model", "gpt-3.5-turbo")
+    AI_ENABLE_PROFILE = _ai.get("enable_profile", False)
+
+
     reload_proxy_config()
     print(f"[{ts()}] [系统] 核心配置已完成同步。")
 

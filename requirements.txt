@@ -2,8 +2,8 @@ fastapi
 uvicorn[standard] 
 PyYAML 
 pydantic 
-requests 
+requests
+httpx
 curl_cffi 
 PySocks 
-cloudflare 
-playwright
+cloudflare

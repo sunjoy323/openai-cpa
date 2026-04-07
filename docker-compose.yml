@@ -5,12 +5,11 @@ services:
     image: wenfxl/wenfxl-codex-manager:latest
     container_name: wenfxl_codex_manager
     ports:
-      - "8899:8000"
+      - "8000:8000"
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./config.yaml:/app/config.yaml
       - ./data:/app/data
 
   watchtower:

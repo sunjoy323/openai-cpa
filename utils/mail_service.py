@@ -18,12 +18,39 @@ from urllib.parse import urlparse
 import socks
 from curl_cffi import requests
 from utils import config as cfg
-
+from utils.ai_service import AIService
+luckmail_lock = threading.Lock()
 
 _CM_TOKEN_CACHE: Optional[str] = None
 
 _thread_data = threading.local()
 _orig_sleep = time.sleep
+LOCAL_USED_PIDS = set()
+AI_NAME_POOL = []
+AI_KW_POOL = []
+FIRST_NAMES = [
+    "james", "john", "robert", "michael", "william", "david", "richard", "joseph", "thomas", "charles",
+    "christopher", "daniel", "matthew", "anthony", "mark", "donald", "steven", "paul", "andrew", "joshua"
+]
+LAST_NAMES = [
+    "smith", "johnson", "williams", "brown", "jones", "garcia", "miller", "davis", "rodriguez", "martinez",
+    "hernandez", "lopez", "gonzalez", "wilson", "anderson", "thomas", "taylor", "moore", "jackson", "martin"
+]
+
+def _safe_set_tag(lm_service, p_id, tag_id):
+    """带重试机制的异步打标，防止网络波动导致打标失败变成死循环号"""
+    for _ in range(3):
+        try:
+            if lm_service.set_email_tag(p_id, tag_id):
+                return
+        except Exception:
+            pass
+        time.sleep(2)
+
+def clear_sticky_domain():
+    """注册失败时调用"""
+    if hasattr(_thread_data, 'sticky_domain'):
+        _thread_data.sticky_domain = None
 
 def set_last_email(email: str):
     _thread_data.last_attempt_email = email
@@ -52,6 +79,15 @@ def mask_email(text: str) -> str:
     if "@" in text:
         prefix, _ = text.split("@", 1)
         return f"{prefix}@***.***"
+
+    domain_match = re.match(r"^([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|\d{1,3}(?:\.\d{1,3}){3})(:\d+)?$", text)
+    if domain_match:
+        domain_or_ip = domain_match.group(1)
+        port = domain_match.group(2) or ""
+        keep = min(4, max(2, len(domain_or_ip) // 3))
+        prefix = domain_or_ip[:keep]
+        return f"{prefix}***.***{port}"
+
     match = re.match(r"token_(.+)_(\d{10,})\.json", text)
     if match:
         ep, ts_ = match.group(1), match.group(2)
@@ -85,16 +121,29 @@ def get_cm_token(proxies=None) -> Optional[str]:
         print(f"[{cfg.ts()}] [ERROR] CloudMail 接口请求异常: {e}")
     return None
 
+def _get_ai_data_package():
+    global AI_NAME_POOL, AI_KW_POOL
+    ai_enabled = getattr(cfg, 'AI_ENABLE_PROFILE', False)
+
+    if ai_enabled:
+        ai = AIService()
+        if len(AI_NAME_POOL) < 5: AI_NAME_POOL.extend(ai.fetch_names())
+        if len(AI_KW_POOL) < 10: AI_KW_POOL.extend(ai.fetch_keywords())
+        if AI_NAME_POOL:
+            return AI_NAME_POOL.pop(0), True
+
+    letters = "".join(random.choices(string.ascii_lowercase, k=5))
+    digits = "".join(random.choices(string.digits, k=3))
+    return f"{letters}{digits}", False
+
 def get_email_and_token(proxies: Any = None) -> tuple:
     """兼容五种邮箱模式的地址创建，返回 (email, token_or_id)。"""
     if getattr(cfg, 'GLOBAL_STOP', False): return None, None
-    letters = "".join(random.choices(string.ascii_lowercase, k=5))
-    digits  = "".join(random.choices(string.digits, k=random.randint(1, 3)))
-    suffix  = "".join(random.choices(string.ascii_lowercase, k=random.randint(1, 3)))
-    prefix  = letters + digits + suffix
+    _thread_data.last_attempt_email = None
 
     mode = cfg.EMAIL_API_MODE
     mail_proxies = proxies if cfg.USE_PROXY_FOR_EMAIL else None
+
     if mode == "mail_curl":
         try:
             url = f"{cfg.MC_API_BASE}/api/remail?key={cfg.MC_KEY}"
@@ -104,22 +153,156 @@ def get_email_and_token(proxies: Any = None) -> tuple:
                 email = data["email"]
                 mailbox_id = data["id"]
                 set_last_email(email)
-                print(f"[{cfg.ts()}] [INFO] mail-curl 分配邮箱: {email} (BoxID: {mailbox_id})")
+                print(f"[{cfg.ts()}] [INFO] mail-curl 分配邮箱: ({mask_email(email)}) (BoxID: {mailbox_id})")
                 return email, mailbox_id
         except Exception as e:
             print(f"[{cfg.ts()}] [ERROR] mail-curl 获取邮箱异常: {e}")
         return None, None
 
+    if mode == "luckmail":
+        try:
+            from utils.luckmail_service import LuckMailService
+            lm_service = LuckMailService(
+                api_key=cfg.LUCKMAIL_API_KEY,
+                preferred_domain=getattr(cfg, 'LUCKMAIL_PREFERRED_DOMAIN', ""),
+                proxies=mail_proxies,
+                email_type=getattr(cfg, 'LUCKMAIL_EMAIL_TYPE', "ms_graph"),
+                variant_mode=getattr(cfg, 'LUCKMAIL_VARIANT_MODE', "")
+            )
+
+            tag_id = getattr(cfg, 'LUCKMAIL_TAG_ID', None)
+            if not tag_id:
+                with luckmail_lock:
+                    tag_id = getattr(cfg, 'LUCKMAIL_TAG_ID', None)
+                    if not tag_id:
+                        tag_id = lm_service.get_or_create_tag_id("已使用")
+                        if tag_id:
+                            cfg.LUCKMAIL_TAG_ID = tag_id
+                            try:
+                                import yaml
+                                with cfg.CONFIG_FILE_LOCK:
+                                    with open(cfg.CONFIG_PATH, "r", encoding="utf-8") as f:
+                                        y = yaml.safe_load(f) or {}
+                                    y.setdefault("luckmail", {})["tag_id"] = tag_id
+                                    with open(cfg.CONFIG_PATH, "w", encoding="utf-8") as f:
+                                        yaml.dump(y, f, allow_unicode=True, sort_keys=False)
+                                print(f"[{cfg.ts()}] [系统] 标签 ID {tag_id} 已同步至配置文件")
+                            except Exception as e:
+                                print(f"[{cfg.ts()}] [WARNING] 配置文件写入失败: {e}")
+
+            if getattr(cfg, 'LUCKMAIL_REUSE_PURCHASED', False):
+                with luckmail_lock:
+                    email, token, p_id = lm_service.get_random_purchased_email(tag_id=tag_id,
+                                                                               local_used_pids=LOCAL_USED_PIDS)
+                    if p_id:
+                        LOCAL_USED_PIDS.add(p_id)
+
+                if email and token:
+                    print(f"[{cfg.ts()}] [SUCCESS] LuckMail 成功复用历史邮箱: ({mask_email(email)})")
+                    if p_id and tag_id:
+                        threading.Thread(target=_safe_set_tag, args=(lm_service, p_id, tag_id), daemon=True).start()
+                    return email, token
+                print(f"[{cfg.ts()}] [WARNING] 未找到符合条件的历史邮箱，准备购买新号...")
+
+            email, token, p_id = lm_service.get_email_and_token(auto_tag=False)
+
+            if email and token:
+                if p_id:
+                    with luckmail_lock:
+                        LOCAL_USED_PIDS.add(p_id)
+
+                print(f"[{cfg.ts()}] [INFO] LuckMail 成功购买新邮箱: ({mask_email(email)})")
+
+                if p_id and tag_id:
+                    threading.Thread(target=_safe_set_tag, args=(lm_service, p_id, tag_id), daemon=True).start()
+                return email, token
+
+        except Exception as e:
+            print(f"[{cfg.ts()}] [ERROR] LuckMail 流程异常: {e}")
+            return None, None
+
+    if mode == "tempmail":
+        try:
+            from utils.tempmail_service import TempmailService
+            tm_service = TempmailService(proxies=mail_proxies)
+            email, token = tm_service.create_email()
+
+            if email and token:
+                set_last_email(email)
+                print(f"[{cfg.ts()}] [INFO] Tempmail 成功创建邮箱: ({mask_email(email)})")
+                return email, token
+            else:
+                print(f"[{cfg.ts()}] [ERROR] Tempmail 获取邮箱失败")
+        except Exception as e:
+            print(f"[{cfg.ts()}] [ERROR] Tempmail 流程异常: {e}")
+        return None, None
+    if mode == "tempmail_org":
+        try:
+            from utils.tempmail_org import TempMailOrgService
+            tm_org = TempMailOrgService(proxies=mail_proxies)
+            email, token = tm_org.create_email()
+
+            if email and token:
+                set_last_email(email)
+                print(f"[{cfg.ts()}] [INFO] TempMail.org 成功创建邮箱: ({mask_email(email)})")
+                return email, token
+            else:
+                print(f"[{cfg.ts()}] [ERROR] TempMail.org 获取邮箱失败")
+        except Exception as e:
+            print(f"[{cfg.ts()}] [ERROR] TempMail.org 流程异常: {e}")
+        return None, None
+
+    ai_switch_on = getattr(cfg, 'AI_ENABLE_PROFILE', False)
+    if ai_switch_on:
+        print(f"[{cfg.ts()}] [AI-状态] 已开启 AI 智能邮箱域名信息增强...")
+
+    prefix, ai_enabled = _get_ai_data_package()
+
+    if cfg.ENABLE_SUB_DOMAINS:
+        sticky = getattr(_thread_data, 'sticky_domain', None)
+        if sticky:
+            selected_domain = sticky
+            print(f"[{cfg.ts()}] [INFO] 多级域名模式 - 沿用上一轮成功域名: {mask_email(selected_domain)}")
+        else:
+            main_list = [d.strip() for d in cfg.MAIL_DOMAINS.split(",") if d.strip()]
+            if not main_list:
+                print(f"[{cfg.ts()}] [ERROR] 未配置主域名池，无法捏造子域！")
+                return None, None
+
+            selected_main = random.choice(main_list)
+            if getattr(cfg, 'RANDOM_SUB_DOMAIN_LEVEL', False):
+                level = random.randint(1, 7)
+            else:
+                try:
+                    level = int(getattr(cfg, 'SUB_DOMAIN_LEVEL', 1))
+                except:
+                    level = 1
+
+            random_parts = []
+            for _ in range(level):
+                if ai_enabled and AI_KW_POOL:
+                    kw = AI_KW_POOL.pop(0)
+                    random_parts.append(f"{kw}-{''.join(random.choices(string.ascii_lowercase + string.digits, k=4))}")
+                else:
+                    random_parts.append(''.join(random.choices(string.ascii_lowercase + string.digits, k=8)))
+
+            selected_domain = ".".join(random_parts) + f".{selected_main}"
+            _thread_data.sticky_domain = selected_domain
+    else:
+        domain_list = [d.strip() for d in cfg.MAIL_DOMAINS.split(",") if d.strip()]
+        if not domain_list:
+            print(f"[{cfg.ts()}] [ERROR] 域名池配置为空，无法生成邮箱！")
+            return None, None
+        selected_domain = random.choice(domain_list)
+
+    email_str = f"{prefix}@{selected_domain}"
+    set_last_email(email_str)
+    
     if mode == "cloudmail":
         token = get_cm_token(mail_proxies)
         if not token:
             print(f"[{cfg.ts()}] [ERROR] 未能获取 CloudMail Token，跳过注册")
             return None, None
-        domain_list = [d.strip() for d in cfg.MAIL_DOMAINS.split(",") if d.strip()]
-        if not domain_list:
-            print(f"[{cfg.ts()}] [ERROR] MAIL_DOMAINS 未配置")
-            return None, None
-        email_str = f"{prefix}@{random.choice(domain_list)}"
         try:
             res = requests.post(
                 f"{cfg.CM_API_URL}/api/public/addUser",
@@ -128,12 +311,11 @@ def get_email_and_token(proxies: Any = None) -> tuple:
                 proxies=mail_proxies, timeout=15,
             )
             if res.json().get("code") == 200:
-                set_last_email(email_str)
-                print(f"[{cfg.ts()}] [INFO] CloudMail 成功创建用户: {email_str}")
+                print(f"[{cfg.ts()}] [INFO] CloudMail 成功创建邮箱: {mask_email(email_str)}")
                 return email_str, ""
-            print(f"[{cfg.ts()}] [ERROR] CloudMail 创建用户失败: {res.text}")
+            print(f"[{cfg.ts()}] [ERROR] CloudMail 邮箱创建失败: {res.text}")
         except Exception as e:
-            print(f"[{cfg.ts()}] [ERROR] CloudMail 添加用户异常: {e}")
+            print(f"[{cfg.ts()}] [ERROR] CloudMail 邮箱创建异常: {e}")
         return None, None
 
     if mode == "freemail":
@@ -141,16 +323,6 @@ def get_email_and_token(proxies: Any = None) -> tuple:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {cfg.FREEMAIL_API_TOKEN}"
         }
-        pool = getattr(cfg, 'SUB_DOMAINS_LIST', '') if cfg.ENABLE_SUB_DOMAINS else cfg.MAIL_DOMAINS
-        domain_list = [d.strip() for d in pool.split(",") if d.strip()]
-        
-        if not domain_list:
-            print(f"[{cfg.ts()}] [ERROR] Freemail 域名池为空！请检查配置。")
-            return None, None
-            
-        selected_domain = random.choice(domain_list)
-        email_str = f"{prefix}@{selected_domain}"
-        
         for attempt in range(5):
             if getattr(cfg, 'GLOBAL_STOP', False): return None, None
             try:
@@ -158,65 +330,42 @@ def get_email_and_token(proxies: Any = None) -> tuple:
                                     json={"email": email_str}, headers=headers,
                                     proxies=mail_proxies, verify=_ssl_verify(), timeout=15)
                 res.raise_for_status()
-                
-                set_last_email(email_str)
-                print(f"[{cfg.ts()}] [INFO] 成功通过 Freemail 指定创建邮箱: {email_str}")
+                print(f"[{cfg.ts()}] [INFO] 成功通过 Freemail 指定创建邮箱: {mask_email(email_str)}")
                 return email_str, ""
             except Exception as e:
                 print(f"[{cfg.ts()}] [ERROR] Freemail 邮箱创建异常: {e}")
                 time.sleep(2)
         return None, None
 
-    domain_list = [d.strip() for d in cfg.MAIL_DOMAINS.split(",") if d.strip()]
-    if not domain_list:
-        print(f"[{cfg.ts()}] [ERROR] MAIL_DOMAINS 配置为空，无法生成邮箱！")
-        return None, None
-    selected_domain = random.choice(domain_list)
-    email_str = f"{prefix}@{selected_domain}"
-
     if mode == "imap":
-        set_last_email(email_str)
-        print(f"[{cfg.ts()}] [INFO] 成功生成临时域名邮箱: {email_str}")
+        print(f"[{cfg.ts()}] [INFO] imap成功生成临时域名邮箱: {email_str}")
         return email_str, ""
 
-    if mode == "luckmail":
-        try:
-            from utils.luckmail_service import LuckMailService
-            lm_service = LuckMailService(
-                api_key=cfg.LUCKMAIL_API_KEY, 
-                preferred_domain=getattr(cfg, 'LUCKMAIL_PREFERRED_DOMAIN', "")
-            )
-            email, token = lm_service.get_email_and_token()
-            print(f"[{cfg.ts()}] [INFO] LuckMail 成功分配邮箱: {email}")
-            return email, token
-        except Exception as e:
-            print(f"[{cfg.ts()}] [ERROR] LuckMail 获取邮箱异常: {e}")
-            return None, None
-
-    headers = {"x-admin-auth": cfg.ADMIN_AUTH, "Content-Type": "application/json"}
-    body = {"enablePrefix": False, "name": prefix, "domain": selected_domain}
-    for attempt in range(5):
-        if getattr(cfg, 'GLOBAL_STOP', False): return None, None
-        try:
-            res = requests.post(
-                f"{cfg.GPTMAIL_BASE}/admin/new_address",
-                headers=headers, json=body,
-                proxies=mail_proxies, verify=_ssl_verify(), timeout=15,
-            )
-            res.raise_for_status()
-            data = res.json()
-            if data and data.get("address"):
-                email = data["address"].strip()
-                jwt = data.get("jwt", "").strip()
-                set_last_email(email)
-                print(f"[{cfg.ts()}] [INFO] 成功获取临时邮箱: {email}")
-                return email, jwt
-            print(f"[{cfg.ts()}] [WARNING] 邮箱申请失败 (尝试 {attempt+1}/5): {res.text}")
-            time.sleep(1)
-        except Exception as e:
-            print(f"[{cfg.ts()}] [ERROR] 邮箱注册网络异常，准备重试: {e}")
-            time.sleep(2)
-    return None, None
+    if mode == "cloudflare_temp_email":
+        headers = {"x-admin-auth": cfg.ADMIN_AUTH, "Content-Type": "application/json"}
+        body = {"enablePrefix": False, "name": prefix, "domain": selected_domain}
+        for attempt in range(5):
+            if getattr(cfg, 'GLOBAL_STOP', False): return None, None
+            try:
+                res = requests.post(
+                    f"{cfg.GPTMAIL_BASE}/admin/new_address",
+                    headers=headers, json=body,
+                    proxies=mail_proxies, verify=_ssl_verify(), timeout=15,
+                )
+                res.raise_for_status()
+                data = res.json()
+                if data and data.get("address"):
+                    email = data["address"].strip()
+                    jwt = data.get("jwt", "").strip()
+                    set_last_email(email)
+                    print(f"[{cfg.ts()}] [INFO] cloudflare_temp_email成功获取临时邮箱: {mask_email(email)}")
+                    return email, jwt
+                print(f"[{cfg.ts()}] [WARNING] cloudflare_temp_email邮箱申请失败 (尝试 {attempt+1}/5): {res.text}")
+                time.sleep(1)
+            except Exception as e:
+                print(f"[{cfg.ts()}] [ERROR] cloudflare_temp_email邮箱注册网络异常，准备重试: {e}")
+                time.sleep(2)
+        return None, None
 
 def _decode_mime_header(value: str) -> str:
     if not value:
@@ -358,27 +507,22 @@ class ProxiedIMAP4_SSL(imaplib.IMAP4_SSL):
 
 
 def _create_imap_conn():
-    """建立 IMAP 连接（可选代理穿透）。"""
+    """建立 IMAP 连接（使用安全隔离的代理，防止多线程串台）。"""
     default_proxy = cfg.DEFAULT_PROXY
     if (cfg.USE_PROXY_FOR_EMAIL and default_proxy and
             cfg.IMAP_SERVER.lower() == "imap.gmail.com"):
         try:
-            parsed     = urlparse(default_proxy)
+            parsed = urlparse(default_proxy)
             proxy_host = parsed.hostname
             proxy_port = parsed.port or 80
-            proxy_type = (socks.HTTP if parsed.scheme.lower() in ("http", "https")
-                          else socks.SOCKS5)
-            original_socket = socket.socket
-            try:
-                socks.set_default_proxy(proxy_type, proxy_host, proxy_port)
-                socket.socket = socks.socksocket
-                conn = imaplib.IMAP4_SSL(cfg.IMAP_SERVER, cfg.IMAP_PORT, timeout=20)
-                return conn
-            finally:
-                socket.socket = original_socket
+            proxy_type = (socks.HTTP if parsed.scheme.lower() in ("http", "https") else socks.SOCKS5)
+            return ProxiedIMAP4_SSL(
+                cfg.IMAP_SERVER, cfg.IMAP_PORT,
+                proxy_host, proxy_port, proxy_type,
+                timeout=20
+            )
         except Exception as e:
             print(f"\n[{cfg.ts()}] [ERROR] IMAP 代理注入失败: {e}，回退到直连。")
-            return imaplib.IMAP4_SSL(cfg.IMAP_SERVER, cfg.IMAP_PORT, timeout=15)
     return imaplib.IMAP4_SSL(cfg.IMAP_SERVER, cfg.IMAP_PORT, timeout=15)
 
 
@@ -461,7 +605,7 @@ def get_oai_code(
     mode = cfg.EMAIL_API_MODE
     imap_wait_started_at = time.time()
 
-    print(f"\n[{cfg.ts()}] [INFO] 等待接收验证码 ({mask_email(email)}) ", end="", flush=True)
+    print(f"\n[{cfg.ts()}] [INFO] 等待接收验证码 ({mask_email(email)})...")
 
     if processed_mail_ids is None:
         processed_mail_ids = set()
@@ -532,6 +676,66 @@ def get_oai_code(
                                     processed_mail_ids.add(m_id)
                                     print(f"\n[{cfg.ts()}] [SUCCESS] CloudMail 提取验证码成功: {code}")
                                     return code
+            elif mode == "tempmail":
+                if not jwt:
+                    print(f"\n[{cfg.ts()}] [ERROR] Tempmail 缺少 token，无法提取验证码！")
+                    return ""
+                try:
+                    from utils.tempmail_service import TempmailService
+                    tm_service = TempmailService(proxies=mail_proxies)
+                    email_list = tm_service.get_inbox(jwt)
+
+                    for msg in email_list:
+                        msg_date = str(msg.get("date", 0))
+                        if not msg_date or msg_date in processed_mail_ids:
+                            continue
+
+                        sender = str(msg.get("from", "")).lower()
+                        subject = str(msg.get("subject", ""))
+                        body = str(msg.get("body", ""))
+                        html = str(msg.get("html") or "")
+
+                        content = "\n".join([sender, subject, body, html])
+
+                        safe_content = re.sub(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", " ", content)
+
+                        if "openai" not in sender and "openai" not in content.lower():
+                            continue
+
+                        code = _extract_otp_code(safe_content)
+                        if code:
+                            processed_mail_ids.add(msg_date)
+                            print(f"\n[{cfg.ts()}] [SUCCESS] Tempmail 提取验证码成功: {code}")
+                            return code
+                except Exception as e:
+                    pass
+
+            elif mode == "tempmail_org":
+                if not jwt:
+                    print(f"\n[{cfg.ts()}] [ERROR] TempMail.org 缺少 token，无法提取验证码！")
+                    return ""
+                try:
+                    from utils.tempmail_org import TempMailOrgService
+                    tm_org = TempMailOrgService(proxies=mail_proxies)
+                    email_list = tm_org.get_inbox(jwt)
+
+                    for msg in email_list:
+                        msg_id = str(msg.get("_id", msg.get("id", "")))
+                        if not msg_id or msg_id in processed_mail_ids:
+                            continue
+
+                        subject = str(msg.get("subject", ""))
+                        code = ""
+                        m = re.search(r"(?<!\d)(\d{6})(?!\d)", subject)
+                        if m:
+                            code = m.group(1)
+
+                        if code:
+                            processed_mail_ids.add(msg_id)
+                            print(f"\n[{cfg.ts()}] [SUCCESS] TempMail.org 提取成功: {code}")
+                            return code
+                except Exception as e:
+                    pass
 
             elif mode == "imap":
                 print(
@@ -658,7 +862,10 @@ def get_oai_code(
                         mail_conn = None
                         break
                     except Exception as e:
-                        print(f"\n[{cfg.ts()}] [WARNING] IMAP 扫描文件夹异常 {folder}: {e}")
+                        if "Spam" in folder or "Junk" in folder or "垃圾" in folder:
+                            print(f"\n[{cfg.ts()}] [DEBUG] 访问垃圾箱失败 {folder}: {e}")
+                        else:
+                            print(f"\n[{cfg.ts()}] [WARNING] IMAP 扫描文件夹异常 {folder}: {e}")
                 if not matched_code and mail_conn is not None:
                     print(
                         f"\n[{cfg.ts()}] [DEBUG] IMAP 第 {attempt}/20 次轮询结束，"
@@ -713,9 +920,9 @@ def get_oai_code(
                                 pass
                         if code:
                             processed_mail_ids.add(mail_id)
-                            print(f" 提取成功: {code}")
+                            print(f"[{cfg.ts()}] [SUCCESS] 提取成功: {code}")
                             return code
-            if mode == "luckmail":
+            elif mode == "luckmail":
                 if not jwt:
                     print(f"\n[{cfg.ts()}] [ERROR] LuckMail 缺少 token，无法提取验证码！")
                     return ""
@@ -730,7 +937,6 @@ def get_oai_code(
                         return code
                 except Exception as e:
                     pass
-
             else:
                 if jwt:
                     res = requests.get(
@@ -768,18 +974,19 @@ def get_oai_code(
                         m = re.search(pattern, content)
                         if m:
                             processed_mail_ids.add(mail_id)
-                            print(f" 提取成功: {m.group(1)}")
+                            print(f"[{cfg.ts()}] [SUCCESS] 提取成功: {m.group(1)}")
                             return m.group(1)
-                    print(".", end="", flush=True)
+                    pass
                 else:
-                    print(".", end="", flush=True)
+                    pass
 
         except Exception as e:
             if mode == "imap":
                 print(f"\n[{cfg.ts()}] [ERROR] IMAP 轮询主流程异常: {e}")
             else:
                 print(".", end="", flush=True)
-
+        if attempt % 3 == 0:
+            print(f"[{cfg.ts()}] [INFO] 仍在查询邮箱，暂未收到验证码 (已尝试 {attempt}/20)...")
         time.sleep(3)
 
     print(f"\n[{cfg.ts()}] [ERROR] 接收验证码超时")

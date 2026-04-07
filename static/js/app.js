@@ -3,6 +3,7 @@ const { createApp } = Vue;
 createApp({
     data() {
         return {
+            appVersion: 'v8.7.6',
             isLoggedIn: !!localStorage.getItem('auth_token'),
             loginPassword: '',
             currentTab: 'console',
@@ -13,16 +14,25 @@ createApp({
                 { id: 'accounts', name: '账号库存', icon: '📦' },
                 { id: 'manual_review_accounts', name: '人工复核', icon: '🧑‍⚖️' },
                 { id: 'email', name: '邮箱配置', icon: '📧' },
-				{ id: 'cf_routes', name: 'CF 路由', icon: '🌍' },
+                { id: 'sms', name: '手机接码', icon: '📱' },
+				// { id: 'cf_routes', name: 'CF 路由', icon: '🌍' },
                 { id: 'proxy', name: '网络代理', icon: '🌐' },
                 { id: 'relay', name: '中转管仓', icon: '☁️' },
                 { id: 'concurrency', name: '并发与系统', icon: '⚙️' }
             ],
 			cfGlobalStatus: null,
 			isLoadingSync: false,
+            luckmailManualQty: 1,
+            luckmailManualAutoTag: false,
+            isManualBuying: false,
 			cfRoutes: [],
+            heroSmsBalance: '0.00',
+            heroSmsPrices: [],
+            isLoadingBalance: false,
+            isLoadingPrices: false,
             selectedCfRoutes: [],
 			cfGlobalStatusList: [],
+			cfStatusTimer: null,
             isLoadingCfRoutes: false,
 			isDeletingAccounts: false,
 			isDeletingCfRoutes: false,
@@ -66,7 +76,8 @@ createApp({
 
             toasts: [],
             toastId: 0,
-            confirmModal: { show: false, message: '', resolve: null }
+            confirmModal: { show: false, message: '', resolve: null },
+            updateInfo: { hasUpdate: false, version: '', url: '', changelog: '' }
         };
     },
     mounted() {
@@ -153,6 +164,7 @@ createApp({
             this.fetchManualReviewAccounts();
             this.initSSE();
             this.startStatsPolling();
+            this.checkUpdate();
         },
         startStatsPolling() {
             if(this.statsTimer) clearInterval(this.statsTimer);
@@ -265,11 +277,17 @@ createApp({
         },
         switchTab(tabId) {
             this.currentTab = tabId;
+			if (tabId === 'console') {
+				this.pollStats(); 
+			}
             if (tabId === 'accounts') {
                 this.fetchAccounts();
             } else if (tabId === 'manual_review_accounts') {
                 this.fetchManualReviewAccounts();
             }
+			if (tabId === 'email') {
+				this.fetchConfig();
+			}
         },
         async exportSelectedAccounts() {
             if (this.selectedAccounts.length === 0) {
@@ -574,48 +592,48 @@ createApp({
 				this.subDomainModal.show = true;
 			}
 		},
-		async executeGenerateDomainsOnly() {
-			if (!this.config.mail_domains) return this.showToast('请先填写上方的主发信域名池！', 'warning');
+		// async executeGenerateDomainsOnly() {
+			// if (!this.config.mail_domains) return this.showToast('请先填写上方的主发信域名池！', 'warning');
 			
-			const level = this.config.sub_domain_level || 1;
+			// const level = this.config.sub_domain_level || 1;
 
-			try {
-				const res = await this.authFetch('/api/config/generate_subdomains', {
-					method: 'POST',
-					body: JSON.stringify({
-						main_domains: this.config.mail_domains,
-						count: this.config.sub_domain_count || 10,
-						level: level,
-						api_email: this.config.cf_api_email || '',
-						api_key: this.config.cf_api_key || '',
-						sync: false
-					})
-				});
-				const data = await res.json();
-				if (data.status === 'success') {
-					this.config.sub_domains_list = data.domains;
-					this.showToast('生成成功！如需推送到 CF，请点击右侧推送按钮。', 'success');
-				} else {
-					this.showToast(data.message, 'error');
-				}
-			} catch (e) {
-				this.showToast('生成接口请求失败', 'error');
-			}
-		},
+			// try {
+				// const res = await this.authFetch('/api/config/generate_subdomains', {
+					// method: 'POST',
+					// body: JSON.stringify({
+						// main_domains: this.config.mail_domains,
+						// count: this.config.sub_domain_count || 10,
+						// level: level,
+						// api_email: this.config.cf_api_email || '',
+						// api_key: this.config.cf_api_key || '',
+						// sync: false
+					// })
+				// });
+				// const data = await res.json();
+				// if (data.status === 'success') {
+					// this.config.sub_domains_list = data.domains;
+					// this.showToast('生成成功！如需推送到 CF，请点击右侧推送按钮。', 'success');
+				// } else {
+					// this.showToast(data.message, 'error');
+				// }
+			// } catch (e) {
+				// this.showToast('生成接口请求失败', 'error');
+			// }
+		// },
 
 		async executeSyncToCF() {
-			const rawList = this.config.sub_domains_list || '';
+			const rawList = this.config.mail_domains || '';
 			const subDomains = rawList.split(',').map(d => d.trim()).filter(d => d);
 			
-			if (subDomains.length === 0) return this.showToast('当前没有可同步的二级域名，请先点击生成！', 'warning');
+			if (subDomains.length === 0) return this.showToast('当前没有可解析的主域，请先填写！', 'warning');
 			if (!this.config.cf_api_email || !this.config.cf_api_key) return this.showToast('请填写 CF 账号邮箱和 API Key！', 'warning');
-			const confirmed = await this.customConfirm(`即将把 ${subDomains.length} 个域名多线程推送到 Cloudflare，确定继续吗？`);
+			const confirmed = await this.customConfirm(`把 ${subDomains.length} 个主域名解析到 Cloudflare，确定继续吗？`);
 			if (!confirmed) return;
 			this.isLoadingSync = true;
 			this.showToast('🚀 多线程同步中，请耐心等待...', 'info');
 
 			try {
-				const res = await this.authFetch('/api/config/sync_cf_domains', {
+				const res = await this.authFetch('/api/config/add_wildcard_dns', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
@@ -627,140 +645,269 @@ createApp({
 				
 				const data = await res.json();
 				if (data.status === 'success') {
-					this.showToast('✅ 同步指令已发出，正在为您跳转并刷新状态...', 'success');
-					setTimeout(async () => {
-						this.currentTab = 'cf_routes'; 
-						if (typeof this.fetchCfRoutes === 'function') {
-							console.log("正在自动拉取最新线上列表...");
-							await this.fetchCfRoutes(); 
-						}
-						if (typeof this.checkCfGlobalStatus === 'function') {
-							this.checkCfGlobalStatus();
-						}
-						
-						this.showToast('🚀 线上列表已自动更新！', 'success');
-					}, 800);
-
+					this.showToast('✅ 解析成功...', 'success');
 				} else {
-					this.showToast(data.message || '同步失败', 'error');
+					this.showToast(data.message || '解析失败', 'error');
 				}
 			} catch (e) {
-				console.error('CF Sync Error:', e);
-				this.showToast('同步接口请求异常', 'error');
+				this.showToast('解析接口请求异常', 'error');
 			} finally {
 				this.isLoadingSync = false; 
 			}
 		},
-		async checkCfGlobalStatus() {
-			if (!this.config.mail_domains) return;
+		// async checkCfGlobalStatus() {
+			// if (!this.config.mail_domains) return;
+			// const domains = this.config.mail_domains;
+			// try {
+				// const res = await this.authFetch(`/api/config/cf_global_status?main_domain=${encodeURIComponent(domains)}`);
+				// const data = await res.json();
+				// if (data.status === 'success') {
+					// this.cfGlobalStatusList = data.data; 
+					// const allEnabled = data.data.length > 0 && data.data.every(item => item.is_enabled);
+					// if (allEnabled && this.cfStatusTimer) {
+						// this.stopCfStatusPolling(); 
+						// this.showToast('✨ 线上状态已全部激活！', 'success');
+					// }
+				// }
+			// } catch (e) {
+				// this.showToast("无法获取 CF 路由全局状态", e);
+			// }
+		// },
+		// async startCfStatusPolling() {
+			// this.stopCfStatusPolling(); 
+			// this.isLoadingCfRoutes = true;
 			
-			const domains = this.config.mail_domains;
+			// this.showToast("🚀 开启 CF 状态智能监控...");
+
+			// this.cfStatusTimer = setInterval(() => {
+				// this.checkCfGlobalStatus();
+			// }, 8000);
+			// await this.fetchCfRoutes(); 
+		// },
+		// stopCfStatusPolling() {
+			// if (this.cfStatusTimer) {
+				// clearInterval(this.cfStatusTimer);
+				// this.cfStatusTimer = null;
+				// this.isLoadingCfRoutes = false;
+				// this.showToast("🛑 智能监控已停止。");
+			// }
+		// },
+		// async fetchCfRoutes() {
+			// if (!this.config.mail_domains) return this.showToast('请先填写主发信域名池 (用于反推Zone ID)！', 'warning');
+			// if (!this.config.cf_api_email || !this.config.cf_api_key) return this.showToast('请填写 CF 账号邮箱和 API Key！', 'warning');
+
+			// this.isLoadingCfRoutes = true;
+			// this.showToast('🔍 正在连线 Cloudflare 查询线上路由记录...', 'info');
+
+			// try {
+				// const res = await this.authFetch('/api/config/query_cf_domains', {
+					// method: 'POST',
+					// body: JSON.stringify({
+						// main_domains: this.config.mail_domains,
+						// api_email: this.config.cf_api_email,
+						// api_key: this.config.cf_api_key
+					// })
+				// });
+				// const data = await res.json();
+				// if (data.status === 'success') {
+					// if (data.domains) {
+						// this.cfRoutes = data.domains.split(',').filter(d=>d).map(d => ({ 
+							// domain: d, 
+							// loading: false
+						// }));
+					// } else {
+						// this.cfRoutes = [];
+					// }
+					// this.selectedCfRoutes = [];
+					// this.showToast(data.message, 'success');
+				// } else {
+					// this.showToast(data.message, 'error');
+				// }
+				// await this.checkCfGlobalStatus();
+			// } catch (e) {
+				// this.showToast('查询接口请求失败', 'error');
+			// } finally {
+				// if (!this.cfStatusTimer) {
+					// this.isLoadingCfRoutes = false;
+				// }
+			// }
+		// },
+
+		// async deleteSelectedCfRoutes() {
+			// if (this.selectedCfRoutes.length === 0) return;
+			// const domainsToDelete = this.selectedCfRoutes.map(item => item.domain);
 			
-			try {
-				const res = await this.authFetch(`/api/config/cf_global_status?main_domain=${encodeURIComponent(domains)}`);
-				const data = await res.json();
-				if (data.status === 'success') {
-					this.cfGlobalStatusList = data.data; 
-				}
-			} catch (e) {
-				console.error("无法获取 CF 路由全局状态", e);
-			}
-		},
-		async fetchCfRoutes() {
-			if (!this.config.mail_domains) return this.showToast('请先填写主发信域名池 (用于反推Zone ID)！', 'warning');
-			if (!this.config.cf_api_email || !this.config.cf_api_key) return this.showToast('请填写 CF 账号邮箱和 API Key！', 'warning');
+			// this.isDeletingCfRoutes = true;
+			// try {
+				// await this.executeDeleteCfDomains(domainsToDelete);
+			// } finally {
+				// this.isDeletingCfRoutes = false;
+			// }
+		// },
 
-			this.isLoadingCfRoutes = true;
-			this.showToast('🔍 正在连线 Cloudflare 查询线上路由记录...', 'info');
+		// async deleteSingleCfRoute(routeObj) {
+			// routeObj.loading = true; 
+			// try {
+				// await this.executeDeleteCfDomains([routeObj.domain]);
+			// } finally {
+				// routeObj.loading = false;
+			// }
+		// },
 
-			try {
-				const res = await this.authFetch('/api/config/query_cf_domains', {
-					method: 'POST',
-					body: JSON.stringify({
-						main_domains: this.config.mail_domains,
-						api_email: this.config.cf_api_email,
-						api_key: this.config.cf_api_key
-					})
-				});
-				const data = await res.json();
-				if (data.status === 'success') {
-					if (data.domains) {
-						this.cfRoutes = data.domains.split(',').filter(d=>d).map(d => ({ 
-							domain: d, 
-							loading: false
-						}));
-					} else {
-						this.cfRoutes = [];
-					}
-					this.selectedCfRoutes = [];
-					this.showToast(data.message, 'success');
-				} else {
-					this.showToast(data.message, 'error');
-				}
-				await this.checkCfGlobalStatus();
-			} catch (e) {
-				this.showToast('查询接口请求失败', 'error');
-			} finally {
-				this.isLoadingCfRoutes = false;
-			}
-		},
+		// async executeDeleteCfDomains(domainsArray) {
+			// if (!this.config.cf_api_email || !this.config.cf_api_key) return this.showToast('请填写 CF 账号邮箱和 API Key！', 'warning');
 
-		async deleteSelectedCfRoutes() {
-			if (this.selectedCfRoutes.length === 0) return;
-			const domainsToDelete = this.selectedCfRoutes.map(item => item.domain);
-			
-			this.isDeletingCfRoutes = true;
-			try {
-				await this.executeDeleteCfDomains(domainsToDelete);
-			} finally {
-				this.isDeletingCfRoutes = false;
-			}
-		},
+			// const count = domainsArray.length;
+			// const confirmed = await this.customConfirm(`⚠️ 危险操作：\n\n即将调用 Cloudflare API 强制删除这 ${count} 个域名的路由解析记录。确定要继续吗？`);
+			// if (!confirmed) return;
+			// if (count > 1) this.isDeletingCfRoutes = true;
+			// this.showToast(`🗑️ 正在连线 Cloudflare 销毁 ${count} 条记录...`, 'info');
 
-		async deleteSingleCfRoute(routeObj) {
-			routeObj.loading = true; 
-			try {
-				await this.executeDeleteCfDomains([routeObj.domain]);
-			} finally {
-				routeObj.loading = false;
-			}
-		},
-
-		async executeDeleteCfDomains(domainsArray) {
-			if (!this.config.cf_api_email || !this.config.cf_api_key) return this.showToast('请填写 CF 账号邮箱和 API Key！', 'warning');
-
-			const count = domainsArray.length;
-			const confirmed = await this.customConfirm(`⚠️ 危险操作：\n\n即将调用 Cloudflare API 强制删除这 ${count} 个域名的路由解析记录。确定要继续吗？`);
-			if (!confirmed) return;
-			if (count > 1) this.isDeletingCfRoutes = true;
-			this.showToast(`🗑️ 正在连线 Cloudflare 销毁 ${count} 条记录...`, 'info');
-
-			try {
-				const res = await this.authFetch('/api/config/delete_cf_domains', {
-					method: 'POST',
-					body: JSON.stringify({
-						sub_domains: domainsArray.join(','),
-						api_email: this.config.cf_api_email,
-						api_key: this.config.cf_api_key
-					})
-				});
-				const data = await res.json();
-				if (data.status === 'success') {
-					this.showToast(data.message, 'success');
-					this.fetchCfRoutes();
-				} else {
-					this.showToast(data.message, 'error');
-				}
-			} catch (e) {
-				this.showToast('删除接口请求失败', 'error');
-			} finally {
-				this.isDeletingCfRoutes = false;
-			}
-		},
+			// try {
+				// const res = await this.authFetch('/api/config/delete_cf_domains', {
+					// method: 'POST',
+					// body: JSON.stringify({
+						// sub_domains: domainsArray.join(','),
+						// api_email: this.config.cf_api_email,
+						// api_key: this.config.cf_api_key
+					// })
+				// });
+				// const data = await res.json();
+				// if (data.status === 'success') {
+					// this.showToast(data.message, 'success');
+					// this.fetchCfRoutes();
+				// } else {
+					// this.showToast(data.message, 'error');
+				// }
+			// } catch (e) {
+				// this.showToast('删除接口请求失败', 'error');
+			// } finally {
+				// this.isDeletingCfRoutes = false;
+			// }
+		// },
 
 		toggleAllCfRoutes(event) {
 			if (event.target.checked) this.selectedCfRoutes = [...this.cfRoutes];
 			else this.selectedCfRoutes = [];
-		}
+		},
+        async fetchHeroSmsBalance() {
+            if (!this.config.hero_sms.api_key) return this.showToast('请先填写 API Key！', 'warning');
+            this.isLoadingBalance = true;
+            try {
+                const res = await this.authFetch('/api/sms/balance'); // 需后端配合增加此接口
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.heroSmsBalance = data.balance;
+                    this.showToast('余额刷新成功', 'success');
+                } else {
+                    this.showToast(data.message || '查询失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('查询异常: ' + e.message, 'error');
+            } finally {
+                this.isLoadingBalance = false;
+            }
+        },
+        async fetchHeroSmsPrices() {
+            if (!this.config.hero_sms.api_key) return this.showToast('请先填写 API Key！', 'warning');
+            this.isLoadingPrices = true;
+            try {
+                const res = await this.authFetch('/api/sms/prices', {
+                    method: 'POST',
+                    body: JSON.stringify({ service: this.config.hero_sms.service })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.heroSmsPrices = data.prices;
+                    this.showToast(`获取到 ${data.prices.length} 个国家的库存数据`, 'success');
+                } else {
+                    this.showToast(data.message || '获取失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('通信异常: ' + e.message, 'error');
+            } finally {
+                this.isLoadingPrices = false;
+            }
+        },
+        async executeManualLuckMailBuy() {
+            if (this.luckmailManualQty < 1) return;
+            this.isManualBuying = true;
+            try {
+                const res = await this.authFetch('/api/luckmail/bulk_buy', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        quantity: this.luckmailManualQty,
+                        auto_tag: this.luckmailManualAutoTag,
+                        config: this.config.luckmail
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast(data.message, 'success');
+                } else {
+                    this.showToast('购买失败: ' + data.message, 'error');
+                }
+            } catch (e) {
+                this.showToast('网络请求异常', 'error');
+            } finally {
+                this.isManualBuying = false;
+            }
+        },
+        async startManualCheck() {
+            if(this.isRunning) {
+                this.showToast('请先停止当前运行的任务', 'warning');
+                return;
+            }
+            try {
+                const res = await this.authFetch('/api/start_check', {
+                    method: 'POST'
+                });
+                const data = await res.json();
+
+                if(data.code === 200) {
+                    this.showToast(data.message, 'success');
+                    this.pollStats();
+                } else {
+                    this.showToast(data.message || '启动测活失败', 'error');
+                }
+            } catch (err) {
+                this.showToast('网络请求异常', 'error');
+            }
+        },
+        async checkUpdate(isManual = false) {
+            try {
+                const res = await this.authFetch('/api/system/check_update');
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    if (data.has_update) {
+                        this.updateInfo = {
+                            hasUpdate: true,
+                            version: data.remote_version,
+                            url: data.html_url || data.download_url || 'https://github.com/wenfxl/openai-cpa/releases/latest',
+                            changelog: data.changelog
+                        };
+                        // 只有用户主动点击时，才触发弹窗
+                        if (isManual) {
+                            this.promptUpdate();
+                        }
+                    } else if (isManual) {
+                        this.showToast("当前已是最新版本！", "success");
+                    }
+                } else {
+                    if (isManual) this.showToast(data.message || "检查更新失败", "error");
+                }
+            } catch (e) {
+                if (isManual) this.showToast("检查更新请求失败，请检查网络", "error");
+            }
+        },
+        async promptUpdate() {
+            if (!this.updateInfo.hasUpdate) return;
+            const msg = `🚀 发现新版本: ${this.updateInfo.version}\n\n📝 更新内容:\n${this.updateInfo.changelog}\n\n是否前往 GitHub 查看并下载更新？`;
+            const confirmed = await this.customConfirm(msg);
+            if (confirmed) {
+                window.open(this.updateInfo.url, '_blank');
+            }
+        },
     }
 }).mount('#app');

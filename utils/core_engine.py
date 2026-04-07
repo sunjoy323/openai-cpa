@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Optional, Tuple
 from curl_cffi import requests, CurlMime
-
+import queue
 from utils import mail_service
 from utils import config as cfg
 from utils import db_manager
@@ -33,7 +33,7 @@ from utils.register import run, refresh_oauth_token as _refresh_oauth_token
 from utils.proxy_manager import smart_switch_node
 from utils.sub2api_client import Sub2APIClient
 
-
+_stats_lock = threading.Lock()
 sub_fail_counts = {}
 _heal_lock = threading.Lock()
 DEFAULT_CLIPROXY_UA = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
@@ -52,7 +52,7 @@ KNOWN_CLIPROXY_ERROR_LABELS = {
     "unsupported_region":   "地区不支持",
 }
 
-log_queue    = __import__("queue").Queue()
+log_queue = queue.Queue(maxsize=1500)
 _orig_print  = builtins.print
 _thread_local = threading.local()
 _print_lock   = threading.Lock()
@@ -72,7 +72,10 @@ def web_print(*args, **kwargs):
         with _print_lock:
             msg = _thread_local.buffer.lstrip("\n")
             if msg and msg.strip() != ".":
-                log_queue.put(msg.strip())
+                try:
+                    log_queue.put_nowait(msg.strip())
+                except queue.Full:
+                    pass
         _thread_local.buffer = ""
 
 
@@ -481,52 +484,39 @@ def handle_registration_result(result: Any, cpa_upload: bool = False) -> str:
     password = None
     if result and isinstance(result, (tuple, list)) and len(result) >= 2:
         token_json_str, password = result
-
+        
+    ret_status = "success"
+     
     if not token_json_str or token_json_str == "retry_403":
         if token_json_str == "retry_403":
-            run_stats["retries"] += 1
+            with _stats_lock: run_stats["retries"] += 1
             print(f"[{ts()}] [WARNING] 检测到 403 频率限制，挂起重试...")
             ret_status = "retry_403"
         else:
-            run_stats["failed"] += 1
+            with _stats_lock: run_stats["failed"] += 1
             ret_status = "failed"
+        if cfg.ENABLE_SUB_DOMAINS:
+            mail_service.clear_sticky_domain() 
+            print(f"[{ts()}] [系统] 域名 {mask_email(cur_dom or '')} 注册失败，下一轮重新生成。")
+            
+    else:
+        with _stats_lock: run_stats["success"] += 1
+        token_data    = json.loads(token_json_str)
+        account_email = token_data.get("email", "unknown")
 
-        if cfg.ENABLE_SUB_DOMAINS and cur_dom:
-            with _heal_lock:
-                sub_fail_counts[cur_dom] = sub_fail_counts.get(cur_dom, 0) + 1
-                fails = sub_fail_counts[cur_dom]
+        # 存入本地数据库
+        if (cpa_upload and cfg.SAVE_TO_LOCAL_IN_CPA_MODE) or not cpa_upload:
+            if db_manager.save_account_to_db(account_email, password, token_json_str):
+                print(f"[{ts()}] [SUCCESS] 账号密码与 Token 已安全存入: {mask_email(account_email)}")
 
-            if fails >= cfg.SUB_DOMAIN_FAIL_THRESHOLD:
-                auto_heal_subdomain(cur_dom)
-                with _heal_lock: 
-                    sub_fail_counts[cur_dom] = 0 
+        # CPA 云端上传
+        if cpa_upload:
+            success, up_msg = upload_to_cpa_integrated(token_data, cfg.CPA_API_URL, cfg.CPA_API_TOKEN)
+            if success:
+                print(f"[{ts()}] [SUCCESS] 补货凭证 {mask_email(account_email)} 云端上传成功！")
             else:
-                print(f"[{ts()}] [DEBUG] 域名 {mask_email(cur_dom)} 失败计数 ({fails}/{cfg.SUB_DOMAIN_FAIL_THRESHOLD})")
-
-        return ret_status
-
-    if cur_dom:
-        with _heal_lock: 
-            sub_fail_counts[cur_dom] = 0
-
-    run_stats["success"] += 1
-    token_data    = json.loads(token_json_str)
-    account_email = token_data.get("email", "unknown")
-
-    # 存入数据库
-    if (cpa_upload and cfg.SAVE_TO_LOCAL_IN_CPA_MODE) or not cpa_upload:
-        if db_manager.save_account_to_db(account_email, password, token_json_str):
-            print(f"[{ts()}] [SUCCESS] 账号密码与 Token 已安全存入: {mask_email(account_email)}")
-
-    # CPA 云端上传
-    if cpa_upload:
-        success, up_msg = upload_to_cpa_integrated(token_data, cfg.CPA_API_URL, cfg.CPA_API_TOKEN)
-        if success:
-            print(f"[{ts()}] [SUCCESS] 补货凭证 {mask_email(account_email)} 云端上传成功！")
-        else:
-            print(f"[{ts()}] [ERROR] 云端上传失败: {up_msg}")
-
-    return "success"
+                print(f"[{ts()}] [ERROR] 云端上传失败: {up_msg}")
+    return ret_status
 
 def run_and_refresh(proxy, args, cpa_upload=False, skip_switch=False):
     proxy = format_docker_url(proxy)
@@ -534,104 +524,165 @@ def run_and_refresh(proxy, args, cpa_upload=False, skip_switch=False):
     if not skip_switch:
         if not smart_switch_node(proxy):
             print(f"[{ts()}] [WARNING] {proxy} 节点切换失败，将使用当前 IP 继续尝试...")
-    result = run(proxy)
+    
+    result = None
+    try:
+        result = run(proxy) 
+    except Exception as e:
+        print(f"[{ts()}] [ERROR] 注册线程发生未捕获异常")
+
     return handle_registration_result(result, cpa_upload=cpa_upload)
 
-def auto_heal_subdomain(failed_domain: str):
-    print(f"[{ts()}] [自愈] 域名 {failed_domain} 达到失败阈值，触发更替程序...")
-    import wfxl_openai_regst 
-    cf_cfg = getattr(cfg, '_c', {})
-    api_email = cf_cfg.get("cf_api_email")
-    api_key = cf_cfg.get("cf_api_key")
-    root_str = cf_cfg.get("mail_domains", "")
-    root_domains = [d.strip() for d in root_str.split(",") if d.strip()]
+# def auto_heal_subdomain(failed_domain: str):
+    # print(f"[{ts()}] [自愈] 域名 {failed_domain} 达到失败阈值，触发更替程序...")
+    # import wfxl_openai_regst 
+    # cf_cfg = getattr(cfg, '_c', {})
+    # api_email = cf_cfg.get("cf_api_email")
+    # api_key = cf_cfg.get("cf_api_key")
+    # root_str = cf_cfg.get("mail_domains", "")
+    # root_domains = [d.strip() for d in root_str.split(",") if d.strip()]
     
-    main_dom = None
-    for root in root_domains:
-        if failed_domain.endswith(root):
-            main_dom = root
-            break
-    if not main_dom:
-        print(f"[{ts()}] [ERROR] 无法识别 {failed_domain} 所属的主域，请检查配置！")
-        return
+    # main_dom = None
+    # for root in root_domains:
+        # if failed_domain.endswith(root):
+            # main_dom = root
+            # break
+    # if not main_dom:
+        # print(f"[{ts()}] [ERROR] 无法识别 {failed_domain} 所属的主域，请检查配置！")
+        # return
         
         
-    level = cf_cfg.get("sub_domain_level", 1)
+    # level = cf_cfg.get("sub_domain_level", 1)
     
-    try:
-        from cloudflare import Cloudflare
-        cf = Cloudflare(api_email=api_email, api_key=api_key)
-        zones = cf.zones.list(name=main_dom)
-        if zones.result:
-            zone_id = zones.result[0].id
-            url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/email/routing/dns"
-            headers = {"X-Auth-Email": api_email, "X-Auth-Key": api_key, "Content-Type": "application/json"}
-            payload = json.dumps({"name": failed_domain}).encode('utf-8')
-            requests.delete(url, data=payload, headers=headers, impersonate="chrome110")
-            wfxl_openai_regst.dispatch_email_backend_delete(failed_domain, cf_cfg)
-            print(f"[{ts()}] [自愈] 已成功注销失效域名: {mask_email(failed_domain)}")
-    except Exception as e:
-        print(f"[{ts()}] [ERROR] 销毁失效域名异常: {e}")
-        return
+    # try:
+        # from cloudflare import Cloudflare
+        # cf = Cloudflare(api_email=api_email, api_key=api_key)
+        # zones = cf.zones.list(name=main_dom)
+        # if zones.result:
+            # zone_id = zones.result[0].id
+            # url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/email/routing/dns"
+            # headers = {"X-Auth-Email": api_email, "X-Auth-Key": api_key, "Content-Type": "application/json"}
+            # payload = json.dumps({"name": failed_domain}).encode('utf-8')
+            # requests.delete(url, data=payload, headers=headers, impersonate="chrome110")
+            # wfxl_openai_regst.dispatch_email_backend_delete(failed_domain, cf_cfg)
+            # print(f"[{ts()}] [自愈] 已成功注销失效域名: {mask_email(failed_domain)}")
+    # except Exception as e:
+        # print(f"[{ts()}] [ERROR] 销毁失效域名异常: {e}")
+        # return
 
-    refill_num = int(getattr(cfg, 'SUB_DOMAIN_REFILL_COUNT', 1))
-    new_domains = []
-    for _ in range(refill_num):
-        random_parts = []
-        for _ in range(level):
-            random_parts.append(''.join(random.choices(string.ascii_lowercase + string.digits, k=8)))
-        new_domains.append(".".join(random_parts) + f".{main_dom}")
+    # refill_num = int(getattr(cfg, 'SUB_DOMAIN_REFILL_COUNT', 1))
+    # new_domains = []
+    # for _ in range(refill_num):
+        # random_parts = []
+        # for _ in range(level):
+            # random_parts.append(''.join(random.choices(string.ascii_lowercase + string.digits, k=8)))
+        # new_domains.append(".".join(random_parts) + f".{main_dom}")
 
-    with _heal_lock:
-        current_list = [d.strip() for d in cfg.SUB_DOMAINS_LIST.split(",") if d.strip()]
-        if failed_domain in current_list:
-            current_list.remove(failed_domain)
-        current_list.extend(new_domains)
+    # with _heal_lock:
+        # current_list = [d.strip() for d in cfg.SUB_DOMAINS_LIST.split(",") if d.strip()]
+        # if failed_domain in current_list:
+            # current_list.remove(failed_domain)
+        # current_list.extend(new_domains)
         
-        config_path = "config.yaml"
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                y = yaml.safe_load(f) or {}
-            y["sub_domains_list"] = ",".join(current_list)
-            y["sub_domain_fail_threshold"] = cfg.SUB_DOMAIN_FAIL_THRESHOLD
-            y["sub_domain_refill_count"] = cfg.SUB_DOMAIN_REFILL_COUNT
+        # config_path = "config.yaml"
+        # try:
+            # with open(config_path, "r", encoding="utf-8") as f:
+                # y = yaml.safe_load(f) or {}
+            # y["sub_domains_list"] = ",".join(current_list)
+            # y["sub_domain_fail_threshold"] = cfg.SUB_DOMAIN_FAIL_THRESHOLD
+            # y["sub_domain_refill_count"] = cfg.SUB_DOMAIN_REFILL_COUNT
             
-            with open(config_path, "w", encoding="utf-8") as f:
-                yaml.dump(y, f, allow_unicode=True, sort_keys=False)
-            reload_all_configs()
-        except Exception as e:
-            print(f"[{ts()}] [ERROR] 自愈配置保存失败: {e}")
+            # with open(config_path, "w", encoding="utf-8") as f:
+                # yaml.dump(y, f, allow_unicode=True, sort_keys=False)
+            # reload_all_configs()
+        # except Exception as e:
+            # print(f"[{ts()}] [ERROR] 自愈配置保存失败: {e}")
 
-    for ns in new_domains:
-        try:
-            cf.email_routing.dns.create(zone_id=zone_id, name=ns)
-            wfxl_openai_regst.dispatch_email_backend_add(ns, cf_cfg)
-            print(f"[{ts()}] [自愈] 已补货新域名 {ns}，等待生效...")
-        except: pass
+    # for ns in new_domains:
+        # try:
+            # cf.email_routing.dns.create(zone_id=zone_id, name=ns)
+            # wfxl_openai_regst.dispatch_email_backend_add(ns, cf_cfg)
+            # print(f"[{ts()}] [自愈] 已补货新域名 {ns}，等待生效...")
+        # except: pass
 
-    print(f"[{ts()}] [自愈] 正在进入状态监控，等待 Cloudflare 激活路由...")
-    retry_count = 0
-    while True:
-        try:
-            info = cf.email_routing.get(zone_id=zone_id)
-            res_data = getattr(info, 'result', info)
-            status = getattr(res_data, 'status', 'unknown')
-            synced = getattr(res_data, 'synced', False)
+    # print(f"[{ts()}] [自愈] 正在进入状态监控，等待 Cloudflare 激活路由...")
+    # retry_count = 0
+    # while True:
+        # try:
+            # info = cf.email_routing.get(zone_id=zone_id)
+            # res_data = getattr(info, 'result', info)
+            # status = getattr(res_data, 'status', 'unknown')
+            # synced = getattr(res_data, 'synced', False)
 
-            retry_count += 1
-            if retry_count % 4 == 0:
-                print(f"[{ts()}] [监控] (等待中...)")
-
-            if status == 'ready':
-                if synced is True or retry_count > 20: 
-                    print(f"[{ts()}] [SUCCESS] 域名池状态确认完成，准备恢复业务线程。")
-                    break
+            # retry_count += 1
+            
+            # print(f"[{ts()}] [监控] (等待中...)")
+            
+            # if status == 'ready':
+                # if synced is True or retry_count > 20: 
+                    # print(f"[{ts()}] [SUCCESS] 域名池状态确认完成，准备恢复业务线程。")
+                    # break
                     
-        except Exception as e:
-            print(f"[{ts()}] [WARNING] 状态监控请求异常 (重试中): {e}")
-            if retry_count > 10: break
+        # except Exception as e:
+            # print(f"[{ts()}] [WARNING] 状态监控请求异常 (重试中): {e}")
+            # if retry_count > 6: break
             
-        time.sleep(15)
+        # time.sleep(10)
+        
+# def auto_heal_subdomain(failed_domain: str):
+#     """
+#     功能：仅销毁本地失效域名记录。
+#     """
+#     print(f"[{ts()}] [自愈] 域名 {failed_domain} 达到失败阈值，启动快速更替程序...")
+#
+#     cf_cfg = getattr(cfg, '_c', {})
+#     root_str = cf_cfg.get("mail_domains", "")
+#     root_domains = [d.strip() for d in root_str.split(",") if d.strip()]
+#
+#     main_dom = None
+#     for root in root_domains:
+#         if failed_domain.endswith(root):
+#             main_dom = root
+#             break
+#
+#     if not main_dom:
+#         print(f"[{ts()}] [ERROR] 无法识别 {failed_domain} 所属的主域，跳过自愈。")
+#         return
+#
+#     level = cf_cfg.get("sub_domain_level", 1)
+#     refill_num = int(getattr(cfg, 'SUB_DOMAIN_REFILL_COUNT', 1))
+#     new_domains = []
+#     for _ in range(refill_num):
+#         random_parts = []
+#         for _ in range(level):
+#             random_parts.append(''.join(random.choices(string.ascii_lowercase + string.digits, k=8)))
+#         new_domains.append(".".join(random_parts) + f".{main_dom}")
+#
+#     with _heal_lock:
+#         current_list = [d.strip() for d in cfg.SUB_DOMAINS_LIST.split(",") if d.strip()]
+#         if failed_domain in current_list:
+#             current_list.remove(failed_domain)
+#         current_list.extend(new_domains)
+#
+#         config_path = "config.yaml"
+#         try:
+#             with open(config_path, "r", encoding="utf-8") as f:
+#                 y = yaml.safe_load(f) or {}
+#
+#             y["sub_domains_list"] = ",".join(current_list)
+#             y["sub_domain_fail_threshold"] = cfg.SUB_DOMAIN_FAIL_THRESHOLD
+#             y["sub_domain_refill_count"] = cfg.SUB_DOMAIN_REFILL_COUNT
+#
+#             with open(config_path, "w", encoding="utf-8") as f:
+#                 yaml.dump(y, f, allow_unicode=True, sort_keys=False)
+#
+#             reload_all_configs()
+#             for ns in new_domains:
+#                 print(f"[{ts()}] [自愈] 已成功补货新域名: {ns}")
+#
+#             print(f"[{ts()}] [SUCCESS] 配置文件已更新，业务线程将无缝切换新域名。")
+#         except Exception as e:
+#             print(f"[{ts()}] [ERROR] 自愈配置保存失败: {e}")
 
 def _handle_sub2api_dead_account(item: dict, client: Any, is_disabled: bool) -> None:
     """统一处理 Sub2API 彻底死亡账号（删除或禁用）"""
@@ -700,7 +751,7 @@ def process_sub2api_worker(i: int, total: int, item: dict, client: Any, args: An
             item.setdefault("credentials", {}).update(new_tokens)
             
             if hasattr(client, "update_account"):
-                up_ok, up_msg = client.update_account(item)
+                up_ok, up_msg = client.update_account(account_id, item)
                 if up_ok:
                     refresh_success = True
                     print(f"[{ts()}] [SUCCESS] 测活: {mask_email(name)} 刷新后复活成功！")
@@ -726,11 +777,11 @@ def normal_main_loop(args, stop_event: threading.Event):
     sleep_max    = max(sleep_min, cfg.NORMAL_SLEEP_MAX)
     target_count = cfg.NORMAL_TARGET_COUNT
 
-    print(f"\n[{ts()}] >>> 启动常规量产模式 <<<")
+    print(f"\n[{ts()}] [系统] >>> 启动常规量产模式 <<<")
     if target_count > 0:
-        print(f"[{ts()}] 任务目标: 注册 {target_count} 个账号后自动停止")
+        print(f"[{ts()}] [系统] 任务目标: 注册 {target_count} 个账号后自动停止")
     else:
-        print(f"[{ts()}] 任务目标: 无限挂机注册 (按 Ctrl+C 停止)")
+        print(f"[{ts()}] [系统] 任务目标: 无限挂机注册 (按 Ctrl+C 停止)")
 
     success_count  = 0
     total_attempts = 0
@@ -741,7 +792,7 @@ def normal_main_loop(args, stop_event: threading.Event):
             break
 
         total_attempts += 1
-        print(f"\n[{ts()}] --- 开始第 {total_attempts} 次注册 (已成功: {success_count}) ---")
+        print(f"\n[{ts()}] [系统] 开始第 {total_attempts} 次注册 (已成功: {success_count}) ---")
         if stop_event.wait(1.0):
             break
 
@@ -804,44 +855,106 @@ def normal_main_loop(args, stop_event: threading.Event):
             break
 
 
+async def perform_cpa_check(args, async_stop_event, loop):
+    print(f"[{ts()}] [INFO] 开始执行 CPA 仓库全量测活巡检...")
+    res = requests.get(
+        _normalize_cpa_auth_files_url(cfg.CPA_API_URL),
+        headers={"Authorization": f"Bearer {cfg.CPA_API_TOKEN}"},
+        timeout=20,
+    )
+    all_files = res.json().get("files", [])
+    codex_files = [
+        f for f in all_files
+        if "codex" in str(f.get("type", "")).lower()
+           or "codex" in str(f.get("provider", "")).lower()
+    ]
+    total_files = len(codex_files)
+
+    with ThreadPoolExecutor(max_workers=cfg.CPA_THREADS) as executor:
+        futures = [
+            loop.run_in_executor(executor, process_account_worker, i, total_files, item, args)
+            for i, item in enumerate(codex_files, 1)
+        ]
+        results = await asyncio.gather(*futures)
+
+    valid_count = sum(1 for r in results if r)
+    print(f"[{ts()}] [INFO] CPA 测活结束，当前有效数: {valid_count} / {total_files}")
+    return valid_count, total_files
+
+
+async def perform_sub2api_check(args, async_stop_event, loop, client):
+    print(f"[{ts()}] [INFO] 开始执行 Sub2API 仓库全量测活巡检...")
+    success, data = client.get_accounts(page=1, page_size=1000)
+    if not success:
+        print(f"[{ts()}] [ERROR] 获取 Sub2API 库存失败: {data}")
+        return 0, 0
+
+    account_list = data.get("data", {}).get("items", [])
+    total_files = len(account_list)
+
+    with ThreadPoolExecutor(max_workers=cfg.SUB2API_THREADS) as executor:
+        futures = [
+            loop.run_in_executor(executor, process_sub2api_worker, i, total_files, item, client, args)
+            for i, item in enumerate(account_list, 1)
+        ]
+        results = await asyncio.gather(*futures)
+
+    valid_count = sum(1 for r in results if r)
+    print(f"[{ts()}] [INFO] Sub2API 测活结束，当前有效数: {valid_count} / {total_files}")
+    return valid_count, total_files
+
+async def manual_check_main_loop(args, async_stop_event: asyncio.Event):
+    print("=" * 60)
+    print(f"\n[{ts()}] [系统] >>> 启动独立测活清理任务 <<<")
+    print("=" * 60)
+    loop = asyncio.get_running_loop()
+
+    if cfg.ENABLE_CPA_MODE:
+        await perform_cpa_check(args, async_stop_event, loop)
+    elif cfg.ENABLE_SUB2API_MODE:
+        client = Sub2APIClient(api_url=cfg.SUB2API_URL, api_key=cfg.SUB2API_KEY)
+        await perform_sub2api_check(args, async_stop_event, loop, client)
+    else:
+        print(f"[{ts()}] [WARNING] 当前未开启 CPA 或 Sub2API 模式，无法执行仓管测活。")
+
+    print(f"\n[{ts()}] [SUCCESS] 独立测活任务执行完毕！")
+    cfg.GLOBAL_STOP = True
+    async_stop_event.set()
+
+
 async def cpa_main_loop(args, async_stop_event: asyncio.Event):
     """CPA 智能仓管模式（接入发牌器，防止撞车）。"""
     print("=" * 60)
-    print(f"   目标库存阈值: {cfg.MIN_ACCOUNTS_THRESHOLD} | 单次补发量: {cfg.BATCH_REG_COUNT}")
+    print(f"\n[{ts()}] [系统] 目标库存阈值: {cfg.MIN_ACCOUNTS_THRESHOLD} | 单次补发量: {cfg.BATCH_REG_COUNT}")
     print(
-        f"   周限额剔除规则: 剩余低于 {cfg.MIN_REMAINING_WEEKLY_PERCENT}%"
+        f"\n[{ts()}] [系统] 周限额剔除规则: 剩余低于 {cfg.MIN_REMAINING_WEEKLY_PERCENT}%"
         if cfg.MIN_REMAINING_WEEKLY_PERCENT > 0
-        else "   周限额剔除规则: 完全耗尽才剔除"
+        else f"\n[{ts()}] [系统] 周限额剔除规则: 完全耗尽才剔除"
     )
     print("=" * 60)
 
     loop = asyncio.get_running_loop()
 
     while not async_stop_event.is_set():
-        print(f"\n[{ts()}] [INFO] 开始执行仓库例行巡检与测活...")
         try:
-            res = requests.get(
-                _normalize_cpa_auth_files_url(cfg.CPA_API_URL),
-                headers={"Authorization": f"Bearer {cfg.CPA_API_TOKEN}"},
-                timeout=20,
-            )
-            all_files    = res.json().get("files", [])
-            codex_files  = [
-                f for f in all_files
-                if "codex" in str(f.get("type", "")).lower()
-                or "codex" in str(f.get("provider", "")).lower()
-            ]
-            total_files = len(codex_files)
-
-            with ThreadPoolExecutor(max_workers=cfg.CPA_THREADS) as executor:
-                futures = [
-                    loop.run_in_executor(executor, process_account_worker, i, total_files, item, args)
-                    for i, item in enumerate(codex_files, 1)
+            if cfg.CPA_AUTO_CHECK:
+                valid_count, total_files = await perform_cpa_check(args, async_stop_event, loop)
+            else:
+                print(f"\n[{ts()}] [INFO] 自动测活已关闭，直接读取云端列表进行补发判断...")
+                res = requests.get(
+                    _normalize_cpa_auth_files_url(cfg.CPA_API_URL),
+                    headers={"Authorization": f"Bearer {cfg.CPA_API_TOKEN}"},
+                    timeout=20,
+                )
+                all_files = res.json().get("files", [])
+                codex_files = [
+                    f for f in all_files
+                    if "codex" in str(f.get("type", "")).lower()
+                       or "codex" in str(f.get("provider", "")).lower()
                 ]
-                results = await asyncio.gather(*futures)
-
-            valid_count = sum(1 for r in results if r)
-            print(f"[{ts()}] [INFO] 巡检结束，当前仓库有效数: {valid_count}")
+                total_files = len(codex_files)
+                valid_count = total_files
+                print(f"[{ts()}] [INFO] 当前云端总数: {total_files} (未开启自动巡检，默认全部视为有效)")
 
             if valid_count < cfg.MIN_ACCOUNTS_THRESHOLD:
                 need_to_reg          = cfg.BATCH_REG_COUNT
@@ -928,11 +1041,11 @@ async def cpa_main_loop(args, async_stop_event: asyncio.Event):
 async def sub2api_main_loop(args, async_stop_event: asyncio.Event):
     """Sub2API 智能仓管模式"""
     print("=" * 60)
-    print(f"   Sub2API 目标库存阈值: {cfg.SUB2API_MIN_THRESHOLD} | 单次补发量: {cfg.SUB2API_BATCH_COUNT}")
+    print(f"\n[{ts()}] [系统] Sub2API 目标库存阈值: {cfg.SUB2API_MIN_THRESHOLD} | 单次补发量: {cfg.SUB2API_BATCH_COUNT}")
     print(
-        f"   周限额剔除规则: 剩余低于 {cfg.SUB2API_MIN_REMAINING_WEEKLY_PERCENT}%"
+        f"\n[{ts()}] [系统] 周限额剔除规则: 剩余低于 {cfg.SUB2API_MIN_REMAINING_WEEKLY_PERCENT}%"
         if cfg.SUB2API_MIN_REMAINING_WEEKLY_PERCENT > 0
-        else "   周限额剔除规则: 完全耗尽才剔除"
+        else f"\n[{ts()}] [系统] 周限额剔除规则: 完全耗尽才剔除"
     )
     print("=" * 60)
 
@@ -1174,6 +1287,25 @@ class RegEngine:
             return False
         return self.current_thread is not None and self.current_thread.is_alive()
 
+    def start_check(self, args):
+        if self.is_running(): return
+        self._force_stopped = False
+        cfg.GLOBAL_STOP = False
+        self.thread_stop_event.clear()
+        self.current_thread = threading.Thread(
+            target=self._run_check_in_thread, args=(args,), daemon=True
+        )
+        self.current_thread.start()
+
+    def _run_check_in_thread(self, args):
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        try:
+            self.async_stop_event = asyncio.Event()
+            self.loop.run_until_complete(manual_check_main_loop(args, self.async_stop_event))
+        finally:
+            self.loop.close()
+            self._force_stopped = True
 
 if __name__ == "__main__":
     main()

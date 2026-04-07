@@ -24,6 +24,15 @@ except Exception:
 from utils import config as cfg
 from utils import db_manager
 from utils.mail_service import get_email_and_token, get_oai_code, mask_email
+try:
+    from utils.hero_sms import _try_verify_phone_via_hero_sms
+except Exception:
+    _try_verify_phone_via_hero_sms = None
+
+try:
+    from utils.auth_core import generate_payload as _authcore_generate_payload
+except Exception:
+    _authcore_generate_payload = None
 
 AUTH_URL            = "https://auth.openai.com/oauth/authorize"
 TOKEN_URL           = "https://auth.openai.com/oauth/token"
@@ -447,6 +456,26 @@ def _challenge_token(
     *,
     use: bool = False,
 ) -> str:
+    did = session.cookies.get("oai-did") or ""
+    if _authcore_generate_payload is not None and did:
+        try:
+            proxy_url = ""
+            if isinstance(proxies, dict):
+                proxy_url = str(proxies.get("https") or proxies.get("http") or "").strip()
+            else:
+                proxy_url = str(proxies or "").strip()
+            token = _authcore_generate_payload(
+                did=did,
+                flow=flow,
+                proxy=proxy_url,
+                user_agent=session.headers.get("User-Agent"),
+                impersonate="chrome110",
+            )
+            token = str(token or "").strip()
+            if token:
+                return token
+        except Exception as exc:
+            print(f"[{cfg.ts()}] [WARNING] auth_core 取 token 失败，flow={flow}: {exc}")
     if _native_get_token is not None:
         try:
             token = _native_get_token(session, flow, proxies, use=use)
@@ -1031,11 +1060,59 @@ def _retry_oauth_login_flow(
             )
 
         if current_url.endswith("/add-phone"):
+            hero_sms_note = ""
+            if _try_verify_phone_via_hero_sms is None:
+                hero_sms_note = "当前环境未成功加载 HeroSMS 模块，无法自动尝试手机号验证。"
+            else:
+                print(f"[{cfg.ts()}] [INFO] OAuth 链路命中 add-phone，尝试 HeroSMS 自动补过手机号验证...")
+                ok, next_url_or_reason = _try_verify_phone_via_hero_sms(
+                    session=s_log,
+                    proxies=proxies,
+                    hint_url=current_url,
+                )
+                if ok:
+                    hero_sms_current_url = str(next_url_or_reason or "").strip()
+                    if hero_sms_current_url and hero_sms_current_url != current_url:
+                        current_url = hero_sms_current_url
+                    print(f"[{cfg.ts()}] [INFO] HeroSMS 手机号验证成功，当前跳转: {_short_text(current_url, 220)}")
+                    if "code=" in current_url and "state=" in current_url:
+                        return _oauth_retry_result(
+                            True,
+                            token_json=submit_callback_url(
+                                callback_url=current_url,
+                                code_verifier=oauth_log.code_verifier,
+                                redirect_uri=oauth_log.redirect_uri,
+                                expected_state=oauth_log.state,
+                                proxies=proxies,
+                            ),
+                        )
+                    if current_url.endswith("/consent") or current_url.endswith("/workspace"):
+                        token_json = _select_workspace_and_submit(
+                            s_log,
+                            oauth_log,
+                            proxies=proxies,
+                            referer=current_url,
+                            trace=oauth_trace,
+                            stage="hero_sms_workspace_select",
+                        )
+                        if token_json:
+                            return _oauth_retry_result(True, token_json=token_json)
+                        hero_sms_note = "HeroSMS 手机验证已通过，但后续 consent/workspace 链路仍未成功拿到 token。"
+                    else:
+                        hero_sms_note = (
+                            "HeroSMS 手机验证已通过，但当前页面仍未进入可直接提交回调的授权路径: "
+                            f"{_short_text(current_url, 220)}"
+                        )
+                else:
+                    hero_sms_note = f"HeroSMS 自动手机号验证失败: {next_url_or_reason}"
+                    print(f"[{cfg.ts()}] [WARNING] {hero_sms_note}")
+
             note = (
                 "当前授权流已命中手机号验证页。说明这个账号/会话被要求先完成手机验证，"
-                "脚本目前不支持自动过手机号验证。常见诱因是代理/IP 风险、账号环境命中风控，"
-                "或该邮箱注册出来的账号被策略要求补充手机号。"
+                "常见诱因是代理/IP 风险、账号环境命中风控，或该邮箱注册出来的账号被策略要求补充手机号。"
             )
+            if hero_sms_note:
+                note = f"{note} {hero_sms_note}"
             _log_oauth_chain_failure(
                 "phone_verification_required",
                 current_url=current_url,
@@ -1141,7 +1218,6 @@ def run(proxy: Optional[str]) -> tuple:
         proxy = proxy.replace("socks5://", "socks5h://")
     proxies = {"http": proxy, "https": proxy} if proxy else None
     _clear_sentinel_cache()
-
     s_reg = requests.Session(proxies=proxies, impersonate="chrome110")
     s_reg.timeout = 30
 
@@ -1177,7 +1253,6 @@ def run(proxy: Optional[str]) -> tuple:
             print(f"[{cfg.ts()}] [WARNING] 未获取到 oai-did，节点环境可能被关注。")
 
         print(f"[{cfg.ts()}] [INFO] 正在计算风控算力挑战...")
-
         sentinel_signup = _challenge_token(s_reg, "authorize_continue", proxies)
         signup_headers = _oai_headers(
             did,
@@ -1234,6 +1309,19 @@ def run(proxy: Optional[str]) -> tuple:
         )
 
         if need_otp:
+            if cfg.EMAIL_API_MODE == "luckmail":
+                try:
+                    from utils.luckmail_service import LuckMailService
+                    print(f"[{cfg.ts()}] [INFO] 正在检测 LuckMail 邮箱（{mask_email(email)}）是否存活...")
+                    lm_service = LuckMailService(
+                        api_key=cfg.LUCKMAIL_API_KEY,
+                        proxies=proxies if getattr(cfg, 'USE_PROXY_FOR_EMAIL', True) else None
+                    )
+                    if not lm_service.check_token_alive(email_jwt):
+                        print(f"[{cfg.ts()}] [ERROR] 邮箱 已失效，放弃当前注册并重试！")
+                        return None, None
+                except Exception as e:
+                    print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
             otp_url = reg_json.get("continue_url", "")
             if otp_url:
                 otp_headers = _oai_headers(
@@ -1253,7 +1341,7 @@ def run(proxy: Optional[str]) -> tuple:
                     proxies=proxies,
                     timeout=30,
                 )
-
+            print(f"\n[{cfg.ts()}] [INFO] 正在向 {mask_email(email)} 发送验证码...")
             code = ""
             for resend_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
                 if resend_attempt > 0:
@@ -1279,7 +1367,7 @@ def run(proxy: Optional[str]) -> tuple:
                     break
 
             if not code:
-                print(f"[{cfg.ts()}] [ERROR] 重试次数上限，丢弃当前邮箱。")
+                print(f"[{cfg.ts()}] [ERROR] 重试次数上限，丢弃当前 {mask_email(email)} 邮箱。")
                 return None, None
 
             sentinel_otp = _challenge_token(s_reg, "authorize_continue", proxies)

@@ -2,6 +2,7 @@ import sqlite3
 import json
 import os
 from datetime import datetime
+from typing import Any
 
 os.makedirs("data", exist_ok=True)
 DB_PATH = "data/data.db"
@@ -22,6 +23,8 @@ def init_db():
     """初始化 SQLite 数据库，创建账号存储表"""
     with sqlite3.connect(DB_PATH, timeout=10) as conn:
         c = conn.cursor()
+        c.execute('PRAGMA journal_mode=WAL;')
+        c.execute('PRAGMA synchronous=NORMAL;')
         c.execute('''
             CREATE TABLE IF NOT EXISTS accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,6 +55,12 @@ def init_db():
             "last_attempt_at": "TIMESTAMP",
             "last_result": "TEXT",
         })
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS system_kv (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
         conn.commit()
     print(f"[{ts()}] [系统] 数据库模块初始化完成")
 
@@ -300,7 +309,6 @@ def get_accounts_page(page: int = 1, page_size: int = 50) -> dict:
         print(f"[{ts()}] [ERROR] 分页获取账号列表失败: {e}")
         return {"total": 0, "data": []}
 
-
 def get_manual_review_accounts_page(page: int = 1, page_size: int = 50) -> dict:
     """分页获取需要人工登录处理的账号"""
     try:
@@ -340,3 +348,25 @@ def get_manual_review_accounts_page(page: int = 1, page_size: int = 50) -> dict:
     except Exception as e:
         print(f"[{ts()}] [ERROR] 分页获取人工登录待处理账号失败: {e}")
         return {"total": 0, "data": []}
+
+def set_sys_kv(key: str, value: Any):
+    """保存任意数据到系统表"""
+    try:
+        val_str = json.dumps(value, ensure_ascii=False)
+        with sqlite3.connect(DB_PATH, timeout=10) as conn:
+            conn.execute("INSERT OR REPLACE INTO system_kv (key, value) VALUES (?, ?)", (key, val_str))
+            conn.commit()
+    except Exception as e:
+        print(f"[{ts()}] [ERROR] 系统配置保存失败: {e}")
+
+def get_sys_kv(key: str, default=None):
+    """从系统表读取数据"""
+    try:
+        with sqlite3.connect(DB_PATH, timeout=10) as conn:
+            cursor = conn.execute("SELECT value FROM system_kv WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            if row:
+                return json.loads(row[0])
+    except Exception:
+        pass
+    return default
