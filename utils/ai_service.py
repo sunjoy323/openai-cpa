@@ -23,7 +23,7 @@ class AIService:
                 impersonate="chrome110"
             )
             res = resp.json()['choices'][0]['message']['content'].strip()
-            return [k.strip().lower().replace(" ", "-") for k in res.split(",") if k.strip()]
+            return [k.strip().lower().replace(" ", "").replace(".", "").replace("-", "") for k in res.split(",") if k.strip()]
         except:
             return []
 

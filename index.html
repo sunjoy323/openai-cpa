@@ -101,6 +101,9 @@
                     </button>
                 </nav>
                 <div class="hidden md:block p-4 border-t border-gray-800 shrink-0 mt-auto">
+                    <button @click="restartSystem" class="w-full flex items-center justify-center gap-2 text-xs text-yellow-500 hover:text-yellow-400 py-2 mb-2 rounded hover:bg-gray-800 transition border border-yellow-900/30">
+                        <span>⚡</span>重启项目
+                    </button>
                     <button @click="checkUpdate(true)" class="w-full flex items-center justify-center gap-2 text-xs text-blue-400 hover:text-blue-300 py-2 mb-2 rounded hover:bg-gray-800 transition border border-blue-900/30">
                         <span>🔄</span>检查系统更新
                     </button>
@@ -142,7 +145,7 @@
                     </div>
                     
                     <div class="w-full xl:max-w-[80%] mx-auto mt-2 md:mt-3 text-[10px] md:text-[13px] text-gray-400 font-mono tracking-wide overflow-x-auto whitespace-nowrap hide-scrollbar">
-                        成功率 {{stats.success_rate}} · 成功 {{stats.success}}/{{stats.target}} · 失败 {{stats.failed}} 次 · 风控拦截 {{stats.retries}} 次 · 总耗时 {{stats.elapsed}} · 平均 {{stats.avg_time}}
+                        成功率 {{stats.success_rate}} · 成功 {{stats.success}}/{{stats.target}} · 失败 {{stats.failed}} 次 · 风控拦截 {{stats.retries}} 次 · 密码受阻 {{stats.pwd_blocked || 0}} 次 · 出现手机 {{stats.phone_verify || 0}} 次 · 总耗时 {{stats.elapsed}} · 平均 {{stats.avg_time}}
                     </div>
                 </header>
 
@@ -1321,7 +1324,7 @@
                                             <label class="form-label text-blue-800 text-xs md:text-sm font-bold">🛑 运行总结/停止通知模板</label>
                                             <textarea v-model="config.tg_bot.template_stop" class="form-input mb-0 text-xs font-mono h-24 md:h-28 border-blue-200" placeholder="填入总结模板"></textarea>
                                             <p class="text-[10px] text-blue-500 mt-1.5 leading-relaxed">
-                                                可用变量: <code>{success_rate}</code> 成功率, <code>{success}</code> 成功数, <code>{target}</code> 目标数, <code>{failed}</code> 失败数, <code>{retries}</code> 拦截数, <code>{elapsed_time}</code> 总耗时, <code>{avg_time}</code> 平均耗时。
+                                                可用变量: <code>{success_rate}</code> 成功率, <code>{success}</code> 成功数, <code>{target}</code> 目标数, <code>{failed}</code> 失败数, <code>{retries}</code> 拦截数, <code>{pwd_blocked}</code> 密码受阻, <code>{phone_verify}</code> 出现手机, <code>{elapsed_time}</code> 总耗时, <code>{avg_time}</code> 平均耗时。
                                             </p>
                                         </div>
                                     </div>

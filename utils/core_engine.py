@@ -43,7 +43,9 @@ run_stats = {
     "failed": 0,
     "retries": 0,
     "start_time": 0,
-    "target": 0
+    "target": 0,
+    "pwd_blocked": 0,
+    "phone_verify": 0
 }
 KNOWN_CLIPROXY_ERROR_LABELS = {
     "usage_limit_reached":  "周限额已耗尽",
@@ -475,8 +477,16 @@ def _handle_dead_account(name: str, is_disabled: bool) -> None:
     else:
         print(f"[{ts()}] [WARNING] 凭证 {mask_email(name)} 已死亡，当前已是禁用状态，根据配置保留不删除。")
 
-def handle_registration_result(result: Any, cpa_upload: bool = False) -> str:
+def handle_registration_result(result: Any, cpa_upload: bool = False, run_ctx: dict = None) -> str:
+    if getattr(cfg, 'GLOBAL_STOP', False):
+        return "stopped"
     global run_stats
+
+    if run_ctx:
+        if run_ctx.get('pwd_blocked'):
+            with _stats_lock: run_stats["pwd_blocked"] += 1
+        if run_ctx.get('phone_verify'):
+            with _stats_lock: run_stats["phone_verify"] += 1
 
     last_email = mail_service.get_last_email()
     cur_dom = last_email.split("@")[-1] if last_email and "@" in last_email else None
@@ -525,8 +535,6 @@ def handle_registration_result(result: Any, cpa_upload: bool = False) -> str:
             success_text = f"🎉 注册成功\n账号: {account_email}\n密码: {password}\n(温馨提示: 您的TG单号自定义模板配置有误)"
 
         send_tg_msg_sync(success_text)
-
-        send_tg_msg_sync(success_text)
     return ret_status
 
 def run_and_refresh(proxy, args, cpa_upload=False, skip_switch=False):
@@ -537,12 +545,13 @@ def run_and_refresh(proxy, args, cpa_upload=False, skip_switch=False):
             print(f"[{ts()}] [WARNING] {proxy} 节点切换失败，将使用当前 IP 继续尝试...")
     
     result = None
+    run_ctx = {}
     try:
-        result = run(proxy) 
+        result = run(proxy, run_ctx=run_ctx)
     except Exception as e:
         print(f"[{ts()}] [ERROR] 注册线程发生未捕获异常")
 
-    return handle_registration_result(result, cpa_upload=cpa_upload)
+    return handle_registration_result(result, cpa_upload=cpa_upload, run_ctx=run_ctx)
 
 # def auto_heal_subdomain(failed_domain: str):
     # print(f"[{ts()}] [自愈] 域名 {failed_domain} 达到失败阈值，触发更替程序...")
@@ -1019,6 +1028,10 @@ async def cpa_main_loop(args, async_stop_event: asyncio.Event):
             else:
                 print(f"[{ts()}] [INFO] 仓库存量充足，无需补发。")
 
+            if async_stop_event.is_set() or getattr(cfg, 'GLOBAL_STOP', False):
+                print(f"[{ts()}] [系统] 主调度循环已彻底退出。")
+                break
+
             print(f"[{ts()}] [INFO] 维护周期结束，{cfg.CHECK_INTERVAL_MINUTES} 分钟后进行下一次巡检...")
             try:
                 await asyncio.wait_for(
@@ -1095,9 +1108,9 @@ async def sub2api_main_loop(args, async_stop_event: asyncio.Event):
                     if not skip_switch:
                         if not smart_switch_node(p):
                             print(f"[{ts()}] [WARNING] [Sub2API补货] 全局节点切换失败...")
-
-                    result = run(p)
-                    status = handle_registration_result(result, cpa_upload=False)
+                    run_ctx = {}
+                    result = run(p, run_ctx=run_ctx)
+                    status = handle_registration_result(result, cpa_upload=False, run_ctx=run_ctx)
 
                     if status == "success":
                         token_dict = json.loads(result[0])
@@ -1172,6 +1185,9 @@ async def sub2api_main_loop(args, async_stop_event: asyncio.Event):
             else:
                 print(f"[{ts()}] [INFO] 仓库存量充足，无需补发。")
 
+            if async_stop_event.is_set() or getattr(cfg, 'GLOBAL_STOP', False):
+                print(f"[{ts()}] [系统] 主调度循环已彻底退出。")
+                break
             print(f"[{ts()}] [INFO] 维护周期结束，{cfg.SUB2API_CHECK_INTERVAL} 分钟后进行下一次巡检...")
             try:
                 await asyncio.wait_for(

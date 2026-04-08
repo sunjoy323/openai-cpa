@@ -3,7 +3,7 @@ const { createApp } = Vue;
 createApp({
     data() {
         return {
-            appVersion: 'v8.8.0',
+            appVersion: 'v8.9.0',
             isLoggedIn: !!localStorage.getItem('auth_token'),
             loginPassword: '',
             currentTab: 'console',
@@ -65,6 +65,7 @@ createApp({
             evtSource: null,
             stats: {
                 success: 0, failed: 0, retries: 0, total: 0, target: 0,
+                pwd_blocked: 0, phone_verify: 0,
                 success_rate: '0.0%', elapsed: '0.0s', avg_time: '0.0s', progress_pct: '0%',
                 mode: '未启动'
             },
@@ -202,7 +203,7 @@ createApp({
                     this.config.tg_bot.template_success = "🎉 <b>注册成功</b>\n📧 账号: <code>{email}</code>\n🔑 密码: <code>{password}</code>";
                 }
                 if (!this.config.tg_bot.template_stop) {
-                    this.config.tg_bot.template_stop = "🛑 <b>系统已收到停止指令</b>\n\n📊 <b>最终运行统计</b>：\n成功率: {success_rate}% · 成功: {success}/{target} · 失败: {failed} 次 · 风控拦截: {retries} 次 · 总耗时: {elapsed_time}s · 平均单号: {avg_time}s";
+                    this.config.tg_bot.template_stop = "🛑 <b>系统已收到停止指令</b>\n\n📊 <b>最终运行统计</b>：\n成功率: {success_rate}% · 成功: {success}/{target} · 失败: {failed} 次 · 风控拦截: {retries} 次 · 密码受阻: {pwd_blocked} 次 · 出现手机: {phone_verify} 次 · 总耗时: {elapsed_time}s · 平均单号: {avg_time}s";
                 }
 				if (!this.config.sub_domain_level) {
                     this.config.sub_domain_level = 1;
@@ -1062,6 +1063,30 @@ createApp({
             } finally {
                 this.gmailOAuth.isLoading = false;
             }
-        }
+        },
+        async restartSystem() {
+            const confirmed = await this.customConfirm("⚠️ 危险操作：\n\n确定要重启整个后端系统吗？\n如果当前有任务正在运行，将会被强制中断！");
+            if (!confirmed) return;
+
+            try {
+                this.showToast("🚀 正在向服务器发送重启指令...", "info");
+                const res = await this.authFetch('/api/system/restart', { method: 'POST' });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    this.showToast("✅ 系统正在重启，网页将于 6 秒后自动刷新...", "success");
+                    if(this.statsTimer) clearInterval(this.statsTimer);
+                    if(this.evtSource) this.evtSource.close();
+
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 6000);
+                } else {
+                    this.showToast(data.message || "重启指令发送失败", "error");
+                }
+            } catch (e) {
+                this.showToast("请求异常，请检查后端状态", "error");
+            }
+        },
     }
 }).mount('#app');

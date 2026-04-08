@@ -17,6 +17,7 @@ import traceback
 import warnings
 import asyncio
 import re
+import threading
 from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header, Query, Request
 from fastapi.staticfiles import StaticFiles
@@ -250,6 +251,8 @@ async def get_stats(token: str = Depends(verify_token)):
         "success": stats["success"],
         "failed": stats["failed"],
         "retries": stats["retries"],
+        "pwd_blocked": stats.get("pwd_blocked", 0),
+        "phone_verify": stats.get("phone_verify", 0),
         "total": total_attempts,
         "target": stats["target"] if stats["target"] > 0 else "∞",
         "success_rate": f"{success_rate}%",
@@ -280,6 +283,8 @@ async def stop_task(token: str = Depends(verify_token)):
             target=target_str,
             failed=stats['failed'],
             retries=stats['retries'],
+            pwd_blocked=stats.get('pwd_blocked', 0),
+            phone_verify=stats.get('phone_verify', 0),
             elapsed_time=elapsed_time,
             avg_time=avg_time
         )
@@ -955,6 +960,30 @@ async def get_sub2api_groups(token: str = Depends(verify_token)):
         return {"status": "success", "data": groups}
     except Exception as exc:
         return {"status": "error", "message": f"Failed to fetch Sub2API groups: {exc}"}
+
+@app.post("/api/system/restart")
+async def restart_system(token: str = Depends(verify_token)):
+    try:
+        if engine.is_running():
+            engine.stop()
+
+        def _do_restart():
+            time.sleep(1.5)
+            print(f"[{core_engine.ts()}] [系统] 🔄 正在执行重启命令...")
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+                subprocess.Popen([sys.executable] + sys.argv)
+                os._exit(0)
+            except Exception as e:
+                print(f"[{core_engine.ts()}] [系统] ❌ 重启失败: {e}")
+                os._exit(1)
+
+        threading.Thread(target=_do_restart, daemon=True).start()
+
+        return {"status": "success", "message": "指令已下发，系统即将重启..."}
+    except Exception as e:
+        return {"status": "error", "message": f"重启异常: {str(e)}"}
 
 if __name__ == "__main__":
     try: reload_all_configs()

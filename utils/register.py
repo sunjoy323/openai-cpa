@@ -188,6 +188,8 @@ def _post_with_retry(
 ) -> Any:
     last_error: Optional[Exception] = None
     for attempt in range(retries + 1):
+        if getattr(cfg, 'GLOBAL_STOP', False):
+            raise RuntimeError("系统已停止，强制中断网络请求")
         try:
             if json_body is not None:
                 return session.post(
@@ -1251,7 +1253,7 @@ def retry_manual_review_login(
     )
 
 
-def run(proxy: Optional[str]) -> tuple:
+def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
     """完整注册流程"""
     processed_mails: set = set()
     proxy = cfg.format_docker_url(proxy)
@@ -1346,6 +1348,8 @@ def run(proxy: Optional[str]) -> tuple:
         )
 
         if pwd_resp.status_code != 200:
+            if run_ctx is not None:
+                run_ctx["pwd_blocked"] = True
             _log_registration_http_failure("密码提交环节", pwd_resp)
             return None, None
 
@@ -1508,6 +1512,8 @@ def run(proxy: Optional[str]) -> tuple:
             )
             about_you_referer = str(getattr(about_you_resp, "url", "") or about_you_referer)
             if about_you_referer.endswith("/add-phone"):
+                if run_ctx is not None:
+                    run_ctx["phone_verify"] = True
                 note = "提交账户资料前已命中手机号验证页，无法继续自动化创建账户。"
                 _log_oauth_chain_failure(
                     "signup_profile_phone_verification",
@@ -1598,6 +1604,8 @@ def run(proxy: Optional[str]) -> tuple:
                 return token_json, password
 
         if direct_current_url.endswith("/add-phone"):
+            if run_ctx is not None:
+                run_ctx["phone_verify"] = True
             print(
                 f"[{cfg.ts()}] [WARNING] 当前注册会话已命中手机号验证页，"
                 f"继续静风控重登录大概率仍会被拦截，仅作为最后兜底尝试。"
@@ -1620,6 +1628,16 @@ def run(proxy: Optional[str]) -> tuple:
             processed_mails=processed_mails,
             record_manual_on_add_phone=True,
         )
+        if run_ctx is not None:
+            retry_url = str(retry_result.get("current_url") or "")
+            retry_stage = str(retry_result.get("stage") or "")
+            retry_status = str(retry_result.get("status") or "")
+            if (
+                retry_status == "manual_login_required"
+                or retry_stage == "phone_verification_required"
+                or "/add-phone" in retry_url
+            ):
+                run_ctx["phone_verify"] = True
         if retry_result.get("success"):
             return retry_result.get("token_json"), password
         return None, None
