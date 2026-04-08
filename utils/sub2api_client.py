@@ -225,7 +225,7 @@ class Sub2APIClient:
 
         url = f"{self.api_url}/api/v1/admin/accounts"
         payload = {
-            "name": token_data.get("email", "unknown"),
+            "name": token_data.get("email", "unknown")[:64],
             "platform": "openai",
             "type": "oauth",
             "credentials": {"refresh_token": refresh_token},
