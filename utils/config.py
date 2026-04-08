@@ -135,18 +135,33 @@ SUB2API_BATCH_COUNT: int = 2
 SUB2API_CHECK_INTERVAL: int = 60
 SUB2API_THREADS: int = 10
 SUB2API_SAVE_TO_LOCAL: bool = True
-SUB2API_MIN_REMAINING_WEEKLY_PERCENT: int = 80
 SUB2API_REMOVE_ON_LIMIT_REACHED: bool = True
 SUB2API_REMOVE_DEAD_ACCOUNTS: bool = True
 SUB2API_ENABLE_TOKEN_REVIVE: bool = False
 SUB2API_AUTO_CHECK: bool = True
-
+SUB2API_ACCOUNT_CONCURRENCY: int = 10
+SUB2API_ACCOUNT_LOAD_FACTOR: int = 10
+SUB2API_ACCOUNT_PRIORITY: int = 1
+SUB2API_ACCOUNT_RATE_MULTIPLIER: float = 1.0
+SUB2API_ACCOUNT_GROUP_IDS: list = []
+SUB2API_ENABLE_WS_MODE: bool = True
 
 LUCKMAIL_PREFERRED_DOMAIN: str = ""
 LUCKMAIL_EMAIL_TYPE: str = ""
 LUCKMAIL_VARIANT_MODE: str = ""
 LUCKMAIL_REUSE_PURCHASED: bool = False
 LUCKMAIL_TAG_ID: Optional[int] = None
+
+DUCKMAIL_API_URL: str = "https://api.duckmail.com"
+DUCKMAIL_DOMAIN: str = ""
+DUCKMAIL_MODE: str = "custom_api"
+DUCK_API_TOKEN: str = ""
+DUCK_COOKIE: str = ""
+DUCK_OFFICIAL_API_BASE: str = "https://quack.duckduckgo.com"
+DUCKMAIL_FORWARD_MODE: str = "Gmail_OAuth"
+DUCKMAIL_FORWARD_EMAIL: str = ""
+DUCK_USE_PROXY: bool = True
+
 HERO_SMS_ENABLED: bool = False
 HERO_SMS_API_KEY: str = ""
 HERO_SMS_BASE_URL: str = "https://hero-sms.com/stubs/handler_api.php"
@@ -173,7 +188,7 @@ AI_API_BASE: str = ""
 AI_API_KEY: str = ""
 AI_MODEL: str = "gpt-3.5-turbo"
 AI_ENABLE_PROFILE: bool = False
-
+TG_BOT: dict = {"enable": False, "token": "", "chat_id": ""}
 
 def reload_all_configs():
     global _c
@@ -196,20 +211,111 @@ def reload_all_configs():
     global _clash_enable, _clash_pool_mode, WARP_PROXY_LIST, PROXY_QUEUE
     global ENABLE_SUB2API_MODE, SUB2API_URL, SUB2API_KEY
     global SUB2API_MIN_THRESHOLD, SUB2API_BATCH_COUNT, SUB2API_CHECK_INTERVAL, SUB2API_THREADS
-    global SUB2API_SAVE_TO_LOCAL, SUB2API_MIN_REMAINING_WEEKLY_PERCENT
+    global SUB2API_SAVE_TO_LOCAL
     global SUB2API_REMOVE_ON_LIMIT_REACHED, SUB2API_REMOVE_DEAD_ACCOUNTS, SUB2API_ENABLE_TOKEN_REVIVE
+    global SUB2API_ACCOUNT_CONCURRENCY, SUB2API_ACCOUNT_LOAD_FACTOR, SUB2API_ACCOUNT_PRIORITY
+    global SUB2API_ACCOUNT_RATE_MULTIPLIER, SUB2API_ACCOUNT_GROUP_IDS, SUB2API_ENABLE_WS_MODE
     global LUCKMAIL_API_KEY,LUCKMAIL_PREFERRED_DOMAIN,LUCKMAIL_EMAIL_TYPE,LUCKMAIL_VARIANT_MODE,LUCKMAIL_REUSE_PURCHASED, LUCKMAIL_TAG_ID
     global HERO_SMS_ENABLED, HERO_SMS_API_KEY, HERO_SMS_BASE_URL, HERO_SMS_COUNTRY, HERO_SMS_SERVICE
     global HERO_SMS_AUTO_PICK_COUNTRY, HERO_SMS_REUSE_PHONE, HERO_SMS_MAX_PRICE
     global HERO_SMS_MIN_BALANCE, HERO_SMS_MAX_TRIES, HERO_SMS_POLL_TIMEOUT_SEC
     global AI_API_BASE, AI_API_KEY, AI_MODEL, AI_ENABLE_PROFILE
     global CPA_AUTO_CHECK, SUB2API_AUTO_CHECK
+    global TG_BOT
+    global DUCKMAIL_API_URL, DUCKMAIL_DOMAIN, DUCKMAIL_MODE, DUCK_API_TOKEN, DUCK_COOKIE, DUCK_OFFICIAL_API_BASE
+    global DUCKMAIL_FORWARD_MODE, DUCKMAIL_FORWARD_EMAIL
+    global DUCK_USE_PROXY
+    def safe_int(value, default, minimum=None):
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            parsed = default
+        if minimum is not None:
+            return max(minimum, parsed)
+        return parsed
+
+    def safe_float(value, default, minimum=None):
+        try:
+            parsed = float(str(value).strip())
+        except (TypeError, ValueError):
+            parsed = default
+        if minimum is not None:
+            return max(minimum, parsed)
+        return parsed
+
+    def safe_bool(value, default=False):
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    def parse_group_ids(raw_value):
+        if isinstance(raw_value, list):
+            raw_items = raw_value
+        else:
+            raw_items = str(raw_value or "").split(",")
+
+        group_ids = []
+        for item in raw_items:
+            text = str(item).strip()
+            if text.isdigit():
+                group_ids.append(int(text))
+        return group_ids
+
+    def safe_int(value, default, minimum=None):
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            parsed = default
+        if minimum is not None:
+            return max(minimum, parsed)
+        return parsed
+
+    def safe_float(value, default, minimum=None):
+        try:
+            parsed = float(str(value).strip())
+        except (TypeError, ValueError):
+            parsed = default
+        if minimum is not None:
+            return max(minimum, parsed)
+        return parsed
+
+    def safe_bool(value, default=False):
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    def parse_group_ids(raw_value):
+        if isinstance(raw_value, list):
+            raw_items = raw_value
+        else:
+            raw_items = str(raw_value or "").split(",")
+
+        group_ids = []
+        for item in raw_items:
+            text = str(item).strip()
+            if text.isdigit():
+                group_ids.append(int(text))
+        return group_ids
 
     _c = init_config()
 
     EMAIL_API_MODE   = _c.get("email_api_mode", "cloudflare_temp_email")
     MAIL_DOMAINS     = _c.get("mail_domains", "")
-    GPTMAIL_BASE     = _c.get("gptmail_base", "")
+    GPTMAIL_BASE     = str(_c.get("gptmail_base", "")).strip().rstrip("/")
     ADMIN_AUTH       = _c.get("admin_auth", "")
 
     _imap            = _c.get("imap", {})
@@ -219,16 +325,16 @@ def reload_all_configs():
     IMAP_PASS        = _imap.get("pass", "")
 
     _free            = _c.get("freemail", {})
-    FREEMAIL_API_URL = _free.get("api_url", "")
+    FREEMAIL_API_URL = str(_free.get("api_url", "")).strip().rstrip("/")
     FREEMAIL_API_TOKEN = _free.get("api_token", "")
   
     _cm              = _c.get("cloudmail", {})
-    CM_API_URL       = _cm.get("api_url", "").rstrip("/")
+    CM_API_URL       = str(_cm.get("api_url", "")).strip().rstrip("/")
     CM_ADMIN_EMAIL   = _cm.get("admin_email", "")
     CM_ADMIN_PASS    = _cm.get("admin_password", "")
 
     _mc              = _c.get("mail_curl", {})
-    MC_API_BASE      = _mc.get("api_base", "").rstrip("/")
+    MC_API_BASE      = str(_mc.get("api_base", "")).strip().rstrip("/")
     MC_KEY           = _mc.get("key", "")
 
     DEFAULT_PROXY    = format_docker_url(_c.get("default_proxy", ""))
@@ -245,7 +351,7 @@ def reload_all_configs():
     _cpa             = _c.get("cpa_mode", {})
     ENABLE_CPA_MODE  = _cpa.get("enable", False)
     SAVE_TO_LOCAL_IN_CPA_MODE = _cpa.get("save_to_local", True)
-    CPA_API_URL      = format_docker_url(_cpa.get("api_url", ""))
+    CPA_API_URL      = format_docker_url(str(_cpa.get("api_url", "")).strip()).rstrip("/")
     CPA_API_TOKEN    = _cpa.get("api_token", "")
     MIN_ACCOUNTS_THRESHOLD  = _cpa.get("min_accounts_threshold", 30)
     BATCH_REG_COUNT  = _cpa.get("batch_reg_count", 1)
@@ -259,18 +365,23 @@ def reload_all_configs():
 
     _sub2api = _c.get("sub2api_mode", {})
     ENABLE_SUB2API_MODE = _sub2api.get("enable", False)
-    SUB2API_URL         = format_docker_url(_sub2api.get("api_url", ""))
+    SUB2API_URL         = format_docker_url(str(_sub2api.get("api_url", "")).strip()).rstrip("/")
     SUB2API_KEY         = _sub2api.get("api_key", "")
     SUB2API_MIN_THRESHOLD = _sub2api.get("min_accounts_threshold", 70)
     SUB2API_BATCH_COUNT = _sub2api.get("batch_reg_count", 2)
     SUB2API_CHECK_INTERVAL = _sub2api.get("check_interval_minutes", 60)
     SUB2API_THREADS     = _sub2api.get("threads", 10)
     SUB2API_SAVE_TO_LOCAL = _sub2api.get("save_to_local", True)
-    SUB2API_MIN_REMAINING_WEEKLY_PERCENT = _sub2api.get("min_remaining_weekly_percent", 80)
     SUB2API_REMOVE_ON_LIMIT_REACHED = _sub2api.get("remove_on_limit_reached", True)
     SUB2API_REMOVE_DEAD_ACCOUNTS = _sub2api.get("remove_dead_accounts", True)
     SUB2API_ENABLE_TOKEN_REVIVE = _sub2api.get("enable_token_revive", False)
     SUB2API_AUTO_CHECK = _sub2api.get("auto_check", True)
+    SUB2API_ACCOUNT_CONCURRENCY = safe_int(_sub2api.get("account_concurrency", 10), 10, minimum=1)
+    SUB2API_ACCOUNT_LOAD_FACTOR = safe_int(_sub2api.get("account_load_factor", 10), 10, minimum=1)
+    SUB2API_ACCOUNT_PRIORITY = safe_int(_sub2api.get("account_priority", 1), 1, minimum=1)
+    SUB2API_ACCOUNT_RATE_MULTIPLIER = safe_float(_sub2api.get("account_rate_multiplier", 1.0), 1.0, minimum=0.0)
+    SUB2API_ACCOUNT_GROUP_IDS = parse_group_ids(_sub2api.get("account_group_ids", ""))
+    SUB2API_ENABLE_WS_MODE = safe_bool(_sub2api.get("enable_ws_mode", True), default=True)
 
     _normal          = _c.get("normal_mode", {})
     NORMAL_SLEEP_MIN = _normal.get("sleep_min", 5)
@@ -308,7 +419,7 @@ def reload_all_configs():
     _hero_sms_conf = _c.get("hero_sms", {})
     HERO_SMS_ENABLED = _hero_sms_conf.get("enabled", False)
     HERO_SMS_API_KEY = _hero_sms_conf.get("api_key", "")
-    HERO_SMS_BASE_URL = _hero_sms_conf.get("base_url", "https://hero-sms.com/stubs/handler_api.php")
+    HERO_SMS_BASE_URL = str(_hero_sms_conf.get("base_url", "https://hero-sms.com/stubs/handler_api.php")).strip().rstrip("/")
     HERO_SMS_COUNTRY = _hero_sms_conf.get("country", "US")
     HERO_SMS_SERVICE = _hero_sms_conf.get("service", "dr")
     HERO_SMS_AUTO_PICK_COUNTRY = _hero_sms_conf.get("auto_pick_country", False)
@@ -336,11 +447,32 @@ def reload_all_configs():
 
 
     _ai = _c.get("ai_service", {})
-    AI_API_BASE = _ai.get("api_base", "https://api.openai.com/v1")
+    AI_API_BASE = str(_ai.get("api_base", "https://api.openai.com/v1")).strip().rstrip("/")
     AI_API_KEY = _ai.get("api_key", "")
     AI_MODEL = _ai.get("model", "gpt-3.5-turbo")
     AI_ENABLE_PROFILE = _ai.get("enable_profile", False)
 
+    _tg = _c.get("tg_bot", {})
+    TG_BOT = {
+        "enable": _tg.get("enable", False),
+        "token": str(_tg.get("token", "")),
+        "chat_id": str(_tg.get("chat_id", "")),
+        "template_success": _tg.get("template_success",
+                                    "🎉 <b>注册成功</b>\n📧 账号: <code>{email}</code>\n🔑 密码: <code>{password}</code>"),
+        "template_stop": _tg.get("template_stop",
+                                 "🛑 <b>系统已收到停止指令</b>\n\n📊 <b>最终运行统计</b>：\n成功率: {success_rate}% · 成功: {success}/{target} · 失败: {failed} 次 · 风控拦截: {retries} 次 · 总耗时: {elapsed_time}s · 平均单号: {avg_time}s")
+    }
+
+    _duck = _c.get("duckmail", {})
+    DUCKMAIL_API_URL = str(_duck.get("api_url") or "https://api.duckmail.com").rstrip("/")
+    DUCKMAIL_DOMAIN = str(_duck.get("domain") or "").strip()
+    DUCKMAIL_MODE = str(_duck.get("mode") or "custom_api").strip().lower()
+    DUCK_API_TOKEN = str(_duck.get("duck_api_token") or "").strip()
+    DUCK_COOKIE = str(_duck.get("duck_cookie") or "").strip()
+    DUCK_OFFICIAL_API_BASE = str(_duck.get("duck_api_base_url") or "https://quack.duckduckgo.com").rstrip("/")
+    DUCKMAIL_FORWARD_MODE = str(_duck.get("forward_mode") or "Gmail_OAuth").strip()
+    DUCKMAIL_FORWARD_EMAIL = str(_duck.get("forward_email") or "").strip()
+    DUCK_USE_PROXY = safe_bool(_duck.get("use_proxy", True), default=True)
 
     reload_proxy_config()
     print(f"[{ts()}] [系统] 核心配置已完成同步。")

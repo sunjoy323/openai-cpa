@@ -3,7 +3,7 @@ const { createApp } = Vue;
 createApp({
     data() {
         return {
-            appVersion: 'v8.7.6',
+            appVersion: 'v8.8.0',
             isLoggedIn: !!localStorage.getItem('auth_token'),
             loginPassword: '',
             currentTab: 'console',
@@ -18,6 +18,7 @@ createApp({
 				// { id: 'cf_routes', name: 'CF 路由', icon: '🌍' },
                 { id: 'proxy', name: '网络代理', icon: '🌐' },
                 { id: 'relay', name: '中转管仓', icon: '☁️' },
+                { id: 'notify', name: '消息通知', icon: '📢' },
                 { id: 'concurrency', name: '并发与系统', icon: '⚙️' }
             ],
 			cfGlobalStatus: null,
@@ -46,6 +47,8 @@ createApp({
 			},
 			tempSubDomains: [],
             logs: [],
+            logBuffer: [],
+            logFlushTimer: null,
             config: null,
             blacklistStr: "",
             warpListStr: "",
@@ -77,7 +80,15 @@ createApp({
             toasts: [],
             toastId: 0,
             confirmModal: { show: false, message: '', resolve: null },
-            updateInfo: { hasUpdate: false, version: '', url: '', changelog: '' }
+            updateInfo: { hasUpdate: false, version: '', url: '', changelog: '' },
+            sub2apiGroups: [],
+            gmailOAuth: {
+                authUrl: '',
+                pastedCode: '',
+                isLoading: false,
+                isGenerating: false
+            },
+            isLoadingSub2APIGroups: false
         };
     },
     mounted() {
@@ -184,9 +195,38 @@ createApp({
             try {
                 const res = await this.authFetch('/api/config');
                 this.config = await res.json();
-				
+                if (!this.config.tg_bot) {
+                    this.config.tg_bot = { enable: false, token: '', chat_id: '' };
+                }
+                if (!this.config.tg_bot.template_success) {
+                    this.config.tg_bot.template_success = "🎉 <b>注册成功</b>\n📧 账号: <code>{email}</code>\n🔑 密码: <code>{password}</code>";
+                }
+                if (!this.config.tg_bot.template_stop) {
+                    this.config.tg_bot.template_stop = "🛑 <b>系统已收到停止指令</b>\n\n📊 <b>最终运行统计</b>：\n成功率: {success_rate}% · 成功: {success}/{target} · 失败: {failed} 次 · 风控拦截: {retries} 次 · 总耗时: {elapsed_time}s · 平均单号: {avg_time}s";
+                }
 				if (!this.config.sub_domain_level) {
                     this.config.sub_domain_level = 1;
+                }
+                if (!this.config.sub2api_mode) {
+                    this.config.sub2api_mode = {};
+                }
+                if (this.config.sub2api_mode.account_concurrency === undefined) {
+                    this.config.sub2api_mode.account_concurrency = 10;
+                }
+                if (this.config.sub2api_mode.account_load_factor === undefined) {
+                    this.config.sub2api_mode.account_load_factor = 10;
+                }
+                if (this.config.sub2api_mode.account_priority === undefined) {
+                    this.config.sub2api_mode.account_priority = 1;
+                }
+                if (this.config.sub2api_mode.account_rate_multiplier === undefined) {
+                    this.config.sub2api_mode.account_rate_multiplier = 1.0;
+                }
+                if (this.config.sub2api_mode.account_group_ids === undefined) {
+                    this.config.sub2api_mode.account_group_ids = '';
+                }
+                if (this.config.sub2api_mode.enable_ws_mode === undefined) {
+                    this.config.sub2api_mode.enable_ws_mode = true;
                 }
                 if(this.config.clash_proxy_pool && Array.isArray(this.config.clash_proxy_pool.blacklist)) {
                     this.blacklistStr = this.config.clash_proxy_pool.blacklist.join('\n');
@@ -538,20 +578,55 @@ createApp({
             if (this.evtSource) {
                 this.evtSource.close();
             }
+            // 每次重新连接时，清除旧的定时器
+            if (this.logFlushTimer) {
+                clearInterval(this.logFlushTimer);
+            }
 
             const token = localStorage.getItem('auth_token');
             const url = `/api/logs/stream?token=${token}`;
-            
+
             this.evtSource = new EventSource(url);
+
+            // 🚀 核心优化：日志缓冲节流渲染
+            // 每 200 毫秒将缓冲池里的日志一次性推入 Vue，并只滚动一次
+            this.logFlushTimer = setInterval(() => {
+                if (this.logBuffer.length > 0) {
+                    const container = document.getElementById('terminal-container');
+
+                    // 【关键修复点】：在把新日志塞进页面 *之前*，先判断此时用户是不是在最底部
+                    let isScrolledToBottom = true;
+                    if (container) {
+                        isScrolledToBottom = container.scrollHeight - container.clientHeight <= container.scrollTop + 50;
+                    }
+
+                    // 一次性批量推入日志
+                    this.logs.push(...this.logBuffer);
+                    this.logBuffer = []; // 清空缓冲池
+
+                    // 控制 DOM 总数量防止卡顿
+                    if (this.logs.length > 500) {
+                        this.logs.splice(0, this.logs.length - 500);
+                    }
+
+                    // 批量更新完 DOM 后，根据 *之前的状态* 决定要不要滚到底部
+                    this.$nextTick(() => {
+                        if (container && (isScrolledToBottom || this.logs.length < 50)) {
+                            container.scrollTop = container.scrollHeight;
+                        }
+                    });
+                }
+            }, 200);
+
             this.evtSource.onmessage = (event) => {
                 let rawText = event.data;
                 rawText = rawText.trim();
                 if (!rawText) return;
-                
+
                 let logObj = { parsed: false, raw: rawText };
                 const regex = /^\[(.*?)\]\s*\[(.*?)\]\s+(.*)$/;
                 const match = rawText.match(regex);
-                
+
                 if (match) {
                     logObj = {
                         parsed: true,
@@ -561,21 +636,9 @@ createApp({
                         raw: rawText
                     };
                 }
-                
-                this.logs.push(logObj);
-                if (this.logs.length > 2000) {
-                    this.logs.splice(0, this.logs.length - 2000);
-                }
 
-                this.$nextTick(() => {
-                    const container = document.getElementById('terminal-container');
-                    if (container) {
-                        const isScrolledToBottom = container.scrollHeight - container.clientHeight <= container.scrollTop + 50;
-                        if (isScrolledToBottom || this.logs.length < 50) {
-                            container.scrollTop = container.scrollHeight;
-                        }
-                    }
-                });
+                // 收到 SSE 消息时，只塞入缓冲池，绝对不触发 Vue 的直接渲染
+                this.logBuffer.push(logObj);
             };
 
             this.evtSource.onerror = (event) => {
@@ -853,6 +916,59 @@ createApp({
                 this.isManualBuying = false;
             }
         },
+        async fetchSub2ApiGroups() {
+            if (!this.config || !this.config.sub2api_mode) return;
+            if (!this.config.sub2api_mode.api_url || !this.config.sub2api_mode.api_key) {
+                this.showToast('Please save the Sub2API URL and API key first.', 'warning');
+                return;
+            }
+
+            this.isLoadingSub2APIGroups = true;
+            try {
+                const res = await this.authFetch('/api/sub2api/groups');
+                const data = await res.json();
+                if (data.status === 'success') {
+                    const raw = data.data;
+                    let groups = [];
+                    if (Array.isArray(raw)) groups = raw;
+                    else if (raw && Array.isArray(raw.list)) groups = raw.list;
+                    else if (raw && Array.isArray(raw.data)) groups = raw.data;
+
+                    this.sub2apiGroups = groups;
+                    if (groups.length === 0) {
+                        this.showToast('No Sub2API groups found. Create one in Sub2API first.', 'warning');
+                    } else {
+                        this.showToast(`Fetched ${groups.length} Sub2API groups.`, 'success');
+                    }
+                } else {
+                    this.showToast(data.message || 'Failed to fetch Sub2API groups.', 'error');
+                }
+            } catch (e) {
+                this.showToast('Group fetch error: ' + e.message, 'error');
+            } finally {
+                this.isLoadingSub2APIGroups = false;
+            }
+        },
+        isGroupSelected(id) {
+            if (!this.config || !this.config.sub2api_mode) return false;
+            const ids = String(this.config.sub2api_mode.account_group_ids || '')
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s);
+            return ids.includes(String(id));
+        },
+        toggleGroup(id) {
+            if (!this.config || !this.config.sub2api_mode) return;
+            const ids = String(this.config.sub2api_mode.account_group_ids || '')
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s);
+            const value = String(id);
+            const index = ids.indexOf(value);
+            if (index >= 0) ids.splice(index, 1);
+            else ids.push(value);
+            this.config.sub2api_mode.account_group_ids = ids.join(',');
+        },
         async startManualCheck() {
             if(this.isRunning) {
                 this.showToast('请先停止当前运行的任务', 'warning');
@@ -876,7 +992,7 @@ createApp({
         },
         async checkUpdate(isManual = false) {
             try {
-                const res = await this.authFetch('/api/system/check_update');
+                const res = await this.authFetch(`/api/system/check_update?current_version=${this.appVersion}`);
                 const data = await res.json();
 
                 if (data.status === 'success') {
@@ -909,5 +1025,43 @@ createApp({
                 window.open(this.updateInfo.url, '_blank');
             }
         },
+        async getGmailAuthUrl() {
+            this.gmailOAuth.isGenerating = true;
+            try {
+                const res = await this.authFetch('/api/gmail/auth_url');
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.gmailOAuth.authUrl = data.url;
+                    this.showToast("授权链接已生成，请在浏览器中打开", "success");
+                } else {
+                    this.showToast(data.message, "error");
+                }
+            } catch (e) {
+                this.showToast("获取失败，请检查 credentials.json 是否已放置", "error");
+            } finally {
+                this.gmailOAuth.isGenerating = false;
+            }
+        },
+        async submitGmailAuthCode() {
+            this.gmailOAuth.isLoading = true;
+            try {
+                const res = await this.authFetch('/api/gmail/exchange_code', {
+                    method: 'POST',
+                    body: JSON.stringify({ code: this.gmailOAuth.pastedCode })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast("🎉 永久授权成功！系统已自动关联该 Gmail", "success");
+                    this.gmailOAuth.authUrl = '';
+                    this.gmailOAuth.pastedCode = '';
+                } else {
+                    this.showToast(data.message, "error");
+                }
+            } catch (e) {
+                this.showToast("网络请求异常", "error");
+            } finally {
+                this.gmailOAuth.isLoading = false;
+            }
+        }
     }
 }).mount('#app');

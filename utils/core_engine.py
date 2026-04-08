@@ -32,6 +32,7 @@ from utils.mail_service import mask_email
 from utils.register import run, refresh_oauth_token as _refresh_oauth_token
 from utils.proxy_manager import smart_switch_node
 from utils.sub2api_client import Sub2APIClient
+from utils.tg_notifier import send_tg_msg_sync
 
 _stats_lock = threading.Lock()
 sub_fail_counts = {}
@@ -343,8 +344,8 @@ def test_sub2api_account_direct(item: dict, proxy: str) -> Tuple[bool, str]:
             return False, f"HTTP {resp.status_code}"
             
         data = resp.json()
-        
-        reason = _extract_cliproxy_failure_reason(data, cfg.SUB2API_MIN_REMAINING_WEEKLY_PERCENT)
+
+        reason = _extract_cliproxy_failure_reason(data,0)
         if reason:
             return False, reason
             
@@ -516,6 +517,16 @@ def handle_registration_result(result: Any, cpa_upload: bool = False) -> str:
                 print(f"[{ts()}] [SUCCESS] 补货凭证 {mask_email(account_email)} 云端上传成功！")
             else:
                 print(f"[{ts()}] [ERROR] 云端上传失败: {up_msg}")
+
+        template_str = getattr(cfg, 'TG_BOT', {}).get("template_success", "成功: {email} / {password}")
+        try:
+            success_text = template_str.format(email=account_email, password=password)
+        except Exception:
+            success_text = f"🎉 注册成功\n账号: {account_email}\n密码: {password}\n(温馨提示: 您的TG单号自定义模板配置有误)"
+
+        send_tg_msg_sync(success_text)
+
+        send_tg_msg_sync(success_text)
     return ret_status
 
 def run_and_refresh(proxy, args, cpa_upload=False, skip_switch=False):
@@ -690,86 +701,77 @@ def _handle_sub2api_dead_account(item: dict, client: Any, is_disabled: bool) -> 
     account_id = item.get("id") 
 
     if cfg.SUB2API_REMOVE_DEAD_ACCOUNTS:
-        print(f"[{ts()}] [WARNING] 凭证 {mask_email(name)} 彻底死亡，执行物理剔除...")
+        print(f"[{ts()}] [ERROR] 凭证 {mask_email(name)} 彻底死亡，执行物理剔除...")
         if hasattr(client, "delete_account") and account_id:
             client.delete_account(account_id) 
     elif not is_disabled:
-        print(f"[{ts()}] [INFO] 凭证 {mask_email(name)} 死亡，根据配置保留，正在禁用...")
+        print(f"[{ts()}] [ERROR] 凭证 {mask_email(name)} 死亡，根据配置保留，正在禁用...")
         if hasattr(client, "set_account_status") and account_id:
             client.set_account_status(account_id, disabled=True)
     else:
-        print(f"[{ts()}] [WARNING] 凭证 {mask_email(name)} 已死亡，当前已是禁用状态，根据配置保留不删除。")
+        print(f"[{ts()}] [ERROR] 凭证 {mask_email(name)} 已死亡，当前已是禁用状态，根据配置保留不删除。")
 
 def process_sub2api_worker(i: int, total: int, item: dict, client: Any, args: Any) -> bool:
-    """专属 Sub2API 的测活 Worker"""
+    """Sub2API 测活 Worker（使用 Sub2API /test SSE 接口）"""
     if hasattr(args, 'check_stop') and args.check_stop(): return False
     name = item.get("name", "unknown")
     account_id = item.get("id")
-    is_disabled = item.get("status") != "active" 
-    
-    is_ok, msg = test_sub2api_account_direct(item, args.proxy)
-    if is_ok:
-        if is_disabled:
-            print(f"[{ts()}] [INFO] Sub2API测活: {mask_email(name)} 额度已恢复且有效，准备启用...")
-            if hasattr(client, "set_account_status") and account_id:
-                ok = client.set_account_status(account_id, disabled=False)
-                print(f"[{ts()}] [{'SUCCESS' if ok else 'ERROR'}] 凭证 {mask_email(name)} {'已成功启用！' if ok else '启用失败。'}")
-            return True
-        print(f"[{ts()}] [INFO] Sub2API测活: {mask_email(name)} 状态健康 ({msg})")
+    result, reason = client.test_account(account_id)
+
+    if result == "ok":
+        print(f"[{ts()}] [SUCCESS] Sub2API测活: {mask_email(name)} 状态健康")
         return True
 
-    print(f"[{ts()}] [WARNING] Sub2API测活: 凭证 {mask_email(name)} 失效，原因: {msg}")
-
-    if "周限额" in msg or "usage_limit_reached" in msg or "低于阈值" in msg:
+    if result == "quota":
         if cfg.SUB2API_REMOVE_ON_LIMIT_REACHED:
-            print(f"[{ts()}] [INFO] 真实测活触发限额剔除规则，执行物理剔除...")
-            if hasattr(client, "delete_account") and account_id:
+            print(f"[{ts()}] [WARNING] Sub2API测活: {mask_email(name)} 额度耗尽，执行物理删除...")
+            if account_id:
                 client.delete_account(account_id)
-        elif not is_disabled:
-            print(f"[{ts()}] [INFO] 真实测活显示额度耗尽，正在禁用...")
-            if hasattr(client, "set_account_status") and account_id:
-                client.set_account_status(account_id, disabled=True)
-        else:
-            print(f"[{ts()}] [INFO] 测活: 账号额度尚未恢复，继续保持禁用状态。")
+            return False
+        print(f"[{ts()}] [WARNING] Sub2API测活: {mask_email(name)} 额度限流，暂不计入有效库存，Sub2API 自动管理")
         return False
+
+    print(f"[{ts()}] [ERROR] Sub2API测活: {mask_email(name)} 测活失败 ({reason})")
 
     if not cfg.SUB2API_ENABLE_TOKEN_REVIVE:
-        print(f"[{ts()}] [INFO] 检测到 Token 已失效，但【复活】已关闭，仅记录状态。")
-        _handle_sub2api_dead_account(item, client, is_disabled)
+        print(f"[{ts()}] [ERROR] Token 复活已关闭，直接执行死亡处理")
+        _handle_sub2api_dead_account(item, client, is_disabled=False)
         return False
 
-    print(f"[{ts()}] [INFO] 测活: 凭证 {mask_email(name)} 准备尝试刷新 Token 复活...")
-    refresh_success = False
     refresh_token_val = item.get("credentials", {}).get("refresh_token")
-    
-    if refresh_token_val:
-        proxies = {"http": args.proxy, "https": args.proxy} if args.proxy else None
-        ok, new_tokens = refresh_oauth_token(refresh_token_val, proxies=proxies)
-        
-        if ok:
-            print(f"[{ts()}] [INFO] {mask_email(name)} Token 刷新成功，正在同步至 Sub2API...")
-            item.setdefault("credentials", {}).update(new_tokens)
-            
-            if hasattr(client, "update_account"):
-                up_ok, up_msg = client.update_account(account_id, item)
-                if up_ok:
-                    refresh_success = True
-                    print(f"[{ts()}] [SUCCESS] 测活: {mask_email(name)} 刷新后复活成功！")
-                else:
-                    print(f"[{ts()}] [ERROR] 刷新后覆盖 Sub2API 失败: {up_msg}")
-            else:
-                print(f"[{ts()}] [WARNING] 刷新成功，但缺少 update_account 接口方法")
-                refresh_success = True 
-        else:
-            print(f"[{ts()}] [WARNING] {mask_email(name)} Token 复活请求被拒绝: {new_tokens.get('error','未知')}")
-    else:
-        print(f"[{ts()}] [WARNING] {mask_email(name)} 未找到有效 refresh_token，无法抢救")
+    if not refresh_token_val:
+        print(f"[{ts()}] [ERROR] {mask_email(name)} 无 refresh_token，执行死亡处理")
+        _handle_sub2api_dead_account(item, client, is_disabled=False)
+        return False
 
-    if not refresh_success:
-        _handle_sub2api_dead_account(item, client, is_disabled)
-        
-    return refresh_success
+    print(f"[{ts()}] [INFO] {mask_email(name)} 尝试刷新 Token...")
+    proxies = {"http": args.proxy, "https": args.proxy} if args.proxy else None
+    ok, new_tokens = refresh_oauth_token(refresh_token_val, proxies=proxies)
 
+    if not ok:
+        err_info = new_tokens.get('error', '未知') if isinstance(new_tokens, dict) else str(new_tokens)
+        print(f"[{ts()}] [ERROR] {mask_email(name)} Token 刷新失败: {err_info}")
+        _handle_sub2api_dead_account(item, client, is_disabled=False)
+        return False
+
+    print(f"[{ts()}] [INFO] {mask_email(name)} Token 刷新成功，同步至 Sub2API...")
+    item.setdefault("credentials", {}).update(new_tokens)
+    up_ok, up_msg = client.update_account(account_id, item)
+    if not up_ok:
+        print(f"[{ts()}] [ERROR] {mask_email(name)} 更新回 Sub2API 失败: {up_msg}")
+        _handle_sub2api_dead_account(item, client, is_disabled=False)
+        return False
+
+    print(f"[{ts()}] [INFO] {mask_email(name)} Token 已更新，二次验证中...")
+    result2, reason2 = client.test_account(account_id)
+
+    if result2 == "ok":
+        print(f"[{ts()}] [SUCCESS] {mask_email(name)} 刷新复活成功，二次验证通过！")
+        return True
+
+    print(f"[{ts()}] [ERROR] {mask_email(name)} 二次验证失败 ({reason2})，账号确认已死")
+    _handle_sub2api_dead_account(item, client, is_disabled=False)
+    return False
 
 def normal_main_loop(args, stop_event: threading.Event):
     """常规量产模式（纯数据库保存）"""
@@ -884,12 +886,11 @@ async def perform_cpa_check(args, async_stop_event, loop):
 
 async def perform_sub2api_check(args, async_stop_event, loop, client):
     print(f"[{ts()}] [INFO] 开始执行 Sub2API 仓库全量测活巡检...")
-    success, data = client.get_accounts(page=1, page_size=1000)
+    success, account_list = client.get_all_accounts()
     if not success:
-        print(f"[{ts()}] [ERROR] 获取 Sub2API 库存失败: {data}")
+        print(f"[{ts()}] [ERROR] 获取 Sub2API 全量库存失败: {account_list}")
         return 0, 0
 
-    account_list = data.get("data", {}).get("items", [])
     total_files = len(account_list)
 
     with ThreadPoolExecutor(max_workers=cfg.SUB2API_THREADS) as executor:
@@ -926,11 +927,7 @@ async def cpa_main_loop(args, async_stop_event: asyncio.Event):
     """CPA 智能仓管模式（接入发牌器，防止撞车）。"""
     print("=" * 60)
     print(f"\n[{ts()}] [系统] 目标库存阈值: {cfg.MIN_ACCOUNTS_THRESHOLD} | 单次补发量: {cfg.BATCH_REG_COUNT}")
-    print(
-        f"\n[{ts()}] [系统] 周限额剔除规则: 剩余低于 {cfg.MIN_REMAINING_WEEKLY_PERCENT}%"
-        if cfg.MIN_REMAINING_WEEKLY_PERCENT > 0
-        else f"\n[{ts()}] [系统] 周限额剔除规则: 完全耗尽才剔除"
-    )
+    print(f"\n[{ts()}] [系统] Sub2API 限额处理: 仅在真实耗尽后禁用或剔除")
     print("=" * 60)
 
     loop = asyncio.get_running_loop()
@@ -1042,38 +1039,48 @@ async def sub2api_main_loop(args, async_stop_event: asyncio.Event):
     """Sub2API 智能仓管模式"""
     print("=" * 60)
     print(f"\n[{ts()}] [系统] Sub2API 目标库存阈值: {cfg.SUB2API_MIN_THRESHOLD} | 单次补发量: {cfg.SUB2API_BATCH_COUNT}")
-    print(
-        f"\n[{ts()}] [系统] 周限额剔除规则: 剩余低于 {cfg.SUB2API_MIN_REMAINING_WEEKLY_PERCENT}%"
-        if cfg.SUB2API_MIN_REMAINING_WEEKLY_PERCENT > 0
-        else f"\n[{ts()}] [系统] 周限额剔除规则: 完全耗尽才剔除"
-    )
+    print(f"\n[{ts()}] [系统] Sub2API 限额处理: 仅在真实耗尽后禁用或剔除")
     print("=" * 60)
 
     loop = asyncio.get_running_loop()
     client = Sub2APIClient(api_url=cfg.SUB2API_URL, api_key=cfg.SUB2API_KEY)
 
     while not async_stop_event.is_set():
-        print(f"\n[{ts()}] [INFO] 开始执行 Sub2API 仓库例行巡检与测活...")
+
         try:
-            success, data = client.get_accounts(page=1, page_size=1000)
-            if not success:
-                print(f"[{ts()}] [ERROR] 获取 Sub2API 库存失败: {data}")
-                try: await asyncio.wait_for(async_stop_event.wait(), timeout=60)
-                except asyncio.TimeoutError: pass
-                continue
+            if cfg.SUB2API_AUTO_CHECK:
+                print(f"\n[{ts()}] [INFO] 开始执行 Sub2API 仓库例行巡检与测活...")
+                success, account_list = client.get_all_accounts()
+                if not success:
+                    print(f"[{ts()}] [ERROR] 获取 Sub2API 全量库存失败: {account_list}")
+                    try: await asyncio.wait_for(async_stop_event.wait(), timeout=60)
+                    except asyncio.TimeoutError: pass
+                    continue
 
-            account_list = data.get("data", {}).get("items", [])
-            total_files = len(account_list)
+                total_files = len(account_list)
 
-            with ThreadPoolExecutor(max_workers=cfg.SUB2API_THREADS) as executor:
-                futures = [
-                    loop.run_in_executor(executor, process_sub2api_worker, i, total_files, item, client, args)
-                    for i, item in enumerate(account_list, 1)
-                ]
-                results = await asyncio.gather(*futures)
+                with ThreadPoolExecutor(max_workers=cfg.SUB2API_THREADS) as executor:
+                    futures = [
+                        loop.run_in_executor(executor, process_sub2api_worker, i, total_files, item, client, args)
+                        for i, item in enumerate(account_list, 1)
+                    ]
+                    results = await asyncio.gather(*futures)
 
-            valid_count = sum(1 for r in results if r)
-            print(f"[{ts()}] [INFO] 巡检结束，当前 Sub2API 仓库有效数: {valid_count}")
+                valid_count = sum(1 for r in results if r)
+                print(f"[{ts()}] [INFO] 巡检结束，当前 Sub2API 仓库有效数: {valid_count}")
+            else:
+                print(f"[{ts()}] [INFO] Sub2API 自动测活已关闭，直接读取云端列表进行补发判断...")
+                success, account_list = client.get_all_accounts()
+                if not success:
+                    print(f"[{ts()}] [ERROR] 获取 Sub2API 全量库存失败: {account_list}")
+                    try:
+                        await asyncio.wait_for(async_stop_event.wait(), timeout=60)
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
+                total_files = len(account_list)
+                valid_count = total_files
+                print(f"[{ts()}] [INFO] 当前云端总数: {total_files} (未开启自动巡检，默认全部视为有效)")
 
             if valid_count < cfg.SUB2API_MIN_THRESHOLD:
                 need_to_reg          = cfg.SUB2API_BATCH_COUNT
@@ -1088,10 +1095,10 @@ async def sub2api_main_loop(args, async_stop_event: asyncio.Event):
                     if not skip_switch:
                         if not smart_switch_node(p):
                             print(f"[{ts()}] [WARNING] [Sub2API补货] 全局节点切换失败...")
-                    
+
                     result = run(p)
                     status = handle_registration_result(result, cpa_upload=False)
-                    
+
                     if status == "success":
                         token_dict = json.loads(result[0])
                         if hasattr(client, "add_account"):
@@ -1129,7 +1136,7 @@ async def sub2api_main_loop(args, async_stop_event: asyncio.Event):
                                 for _ in range(batch_size)
                             ]
                             reg_results = await asyncio.gather(*reg_futures)
-                            
+
                         for status in reg_results:
                             if status == "success":
                                 success_in_this_cycle += 1
@@ -1137,7 +1144,7 @@ async def sub2api_main_loop(args, async_stop_event: asyncio.Event):
                                 print(f"[{ts()}] [WARNING] 遇到 403 频率限制，给服务器 15 秒冷却时间...")
                                 try: await asyncio.wait_for(async_stop_event.wait(), timeout=15)
                                 except asyncio.TimeoutError: pass
-                                
+
                     else:
                         print(f"[{ts()}] [INFO] 单线程补货: {success_in_this_cycle}/{need_to_reg}")
                         if cfg._clash_enable and cfg._clash_pool_mode:
@@ -1151,13 +1158,13 @@ async def sub2api_main_loop(args, async_stop_event: asyncio.Event):
                             status = await loop.run_in_executor(
                                 None, _sub2api_run_wrapper, args.proxy, True
                             )
-                            
+
                         if status == "success":
                             success_in_this_cycle += 1
                         elif status == "retry_403":
                             try: await asyncio.wait_for(async_stop_event.wait(), timeout=10)
                             except asyncio.TimeoutError: pass
-                            
+
                         try: await asyncio.wait_for(async_stop_event.wait(), timeout=5)
                         except asyncio.TimeoutError: pass
 

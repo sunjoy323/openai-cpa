@@ -19,6 +19,33 @@ import socks
 from curl_cffi import requests
 from utils import config as cfg
 from utils.ai_service import AIService
+from utils.gmail_service import get_gmail_otp_via_oauth
+from utils.duckmail_service import DuckMailService
+
+def patch_global_socket():
+    """在底层强制劫持所有网络请求走 SOCKS5 (智能支持 HTTP 转 SOCKS5)"""
+    if getattr(cfg, 'USE_PROXY_FOR_EMAIL', False) and getattr(cfg, 'DEFAULT_PROXY', ""):
+        try:
+            parsed = urlparse(cfg.DEFAULT_PROXY)
+            proxy_host = parsed.hostname
+            proxy_port = parsed.port or (7890 if "http" in parsed.scheme else 1080)
+
+            socks.set_default_proxy(socks.SOCKS5, proxy_host, proxy_port, rdns=True)
+            socket.socket = socks.socksocket
+
+            scheme_used = parsed.scheme.lower()
+            if scheme_used in ("http", "https"):
+                print(f"[{cfg.ts()}] [INFO] 已将 HTTP 代理强制升级为 SOCKS5 全局劫持 (目标: {proxy_host}:{proxy_port})")
+            else:
+                print(f"[{cfg.ts()}] [INFO] 已开启全局 SOCKS5 劫持 (目标: {proxy_host}:{proxy_port})")
+
+        except Exception as e:
+            print(f"[{cfg.ts()}] [ERROR] 全局代理劫持失败: {e}")
+
+
+
+patch_global_socket()
+
 luckmail_lock = threading.Lock()
 
 _CM_TOKEN_CACHE: Optional[str] = None
@@ -37,6 +64,7 @@ LAST_NAMES = [
     "hernandez", "lopez", "gonzalez", "wilson", "anderson", "thomas", "taylor", "moore", "jackson", "martin"
 ]
 
+
 def _safe_set_tag(lm_service, p_id, tag_id):
     """带重试机制的异步打标，防止网络波动导致打标失败变成死循环号"""
     for _ in range(3):
@@ -47,22 +75,28 @@ def _safe_set_tag(lm_service, p_id, tag_id):
             pass
         time.sleep(2)
 
+
 def clear_sticky_domain():
     """注册失败时调用"""
     if hasattr(_thread_data, 'sticky_domain'):
         _thread_data.sticky_domain = None
 
+
 def set_last_email(email: str):
     _thread_data.last_attempt_email = email
 
+
 def get_last_email() -> Optional[str]:
     return getattr(_thread_data, 'last_attempt_email', None)
+
 
 def _smart_sleep(secs):
     for _ in range(int(secs * 10)):
         if getattr(cfg, 'GLOBAL_STOP', False):
             return
         _orig_sleep(0.1)
+
+
 time.sleep = _smart_sleep
 
 
@@ -91,10 +125,10 @@ def mask_email(text: str) -> str:
     match = re.match(r"token_(.+)_(\d{10,})\.json", text)
     if match:
         ep, ts_ = match.group(1), match.group(2)
-        return f"token_{ep[:len(ep)//2]}***_{ts_}.json"
+        return f"token_{ep[:len(ep) // 2]}***_{ts_}.json"
     if len(text) > 8 and ".json" in text:
         name_part = text.replace(".json", "")
-        return f"{name_part[:len(name_part)//2]}***.json"
+        return f"{name_part[:len(name_part) // 2]}***.json"
     return text
 
 
@@ -121,6 +155,7 @@ def get_cm_token(proxies=None) -> Optional[str]:
         print(f"[{cfg.ts()}] [ERROR] CloudMail 接口请求异常: {e}")
     return None
 
+
 def _get_ai_data_package():
     global AI_NAME_POOL, AI_KW_POOL
     ai_enabled = getattr(cfg, 'AI_ENABLE_PROFILE', False)
@@ -135,6 +170,7 @@ def _get_ai_data_package():
     letters = "".join(random.choices(string.ascii_lowercase, k=5))
     digits = "".join(random.choices(string.digits, k=3))
     return f"{letters}{digits}", False
+
 
 def get_email_and_token(proxies: Any = None) -> tuple:
     """兼容五种邮箱模式的地址创建，返回 (email, token_or_id)。"""
@@ -221,6 +257,39 @@ def get_email_and_token(proxies: Any = None) -> tuple:
             print(f"[{cfg.ts()}] [ERROR] LuckMail 流程异常: {e}")
             return None, None
 
+    if mode == "duckmail":
+        try:
+            from utils.duckmail_service import DuckMailService
+            duck_use_proxy = getattr(cfg, 'DUCK_USE_PROXY', True)
+            duck_proxies = proxies if duck_use_proxy else None
+            ds = DuckMailService(proxies=duck_proxies)
+            email, token = ds.create_email()
+            if email:
+                set_last_email(email)
+                print(f"[{cfg.ts()}] [INFO] DuckMail ({ds.mode}) 成功创建邮箱: {mask_email(email)}")
+                return email, token
+            else:
+                print(f"[{cfg.ts()}] [ERROR] DuckMail 获取邮箱失败")
+        except Exception as e:
+            print(f"[{cfg.ts()}] [ERROR] DuckMail 流程异常: {e}")
+        return None, None
+
+    if mode == "generator_email":
+        try:
+            from utils.generator_email_service import GeneratorEmailService
+            ge_service = GeneratorEmailService(proxies=mail_proxies)
+            email, token = ge_service.create_email()
+
+            if email and token:
+                set_last_email(email)
+                print(f"[{cfg.ts()}] [INFO] GeneratorEmail 成功创建邮箱: ({mask_email(email)})")
+                return email, token
+            else:
+                print(f"[{cfg.ts()}] [ERROR] GeneratorEmail 获取邮箱失败")
+        except Exception as e:
+            print(f"[{cfg.ts()}] [ERROR] GeneratorEmail 流程异常: {e}")
+        return None, None
+
     if mode == "tempmail":
         try:
             from utils.tempmail_service import TempmailService
@@ -297,7 +366,7 @@ def get_email_and_token(proxies: Any = None) -> tuple:
 
     email_str = f"{prefix}@{selected_domain}"
     set_last_email(email_str)
-    
+
     if mode == "cloudmail":
         token = get_cm_token(mail_proxies)
         if not token:
@@ -326,7 +395,7 @@ def get_email_and_token(proxies: Any = None) -> tuple:
         for attempt in range(5):
             if getattr(cfg, 'GLOBAL_STOP', False): return None, None
             try:
-                res = requests.post(f"{cfg.FREEMAIL_API_URL.rstrip('/')}/api/create", 
+                res = requests.post(f"{cfg.FREEMAIL_API_URL.rstrip('/')}/api/create",
                                     json={"email": email_str}, headers=headers,
                                     proxies=mail_proxies, verify=_ssl_verify(), timeout=15)
                 res.raise_for_status()
@@ -360,12 +429,13 @@ def get_email_and_token(proxies: Any = None) -> tuple:
                     set_last_email(email)
                     print(f"[{cfg.ts()}] [INFO] cloudflare_temp_email成功获取临时邮箱: {mask_email(email)}")
                     return email, jwt
-                print(f"[{cfg.ts()}] [WARNING] cloudflare_temp_email邮箱申请失败 (尝试 {attempt+1}/5): {res.text}")
+                print(f"[{cfg.ts()}] [WARNING] cloudflare_temp_email邮箱申请失败 (尝试 {attempt + 1}/5): {res.text}")
                 time.sleep(1)
             except Exception as e:
                 print(f"[{cfg.ts()}] [ERROR] cloudflare_temp_email邮箱注册网络异常，准备重试: {e}")
                 time.sleep(2)
         return None, None
+
 
 def _decode_mime_header(value: str) -> str:
     if not value:
@@ -453,7 +523,7 @@ def _extract_mail_fields(mail: dict) -> dict:
         mail.get("source") or mail.get("from") or
         mail.get("from_address") or mail.get("fromAddress") or ""
     ).strip()
-    subject  = str(mail.get("subject") or mail.get("title") or "").strip()
+    subject = str(mail.get("subject") or mail.get("title") or "").strip()
     body_text = str(
         mail.get("text") or mail.get("body") or
         mail.get("content") or mail.get("html") or ""
@@ -462,9 +532,9 @@ def _extract_mail_fields(mail: dict) -> dict:
     if raw:
         try:
             msg = message_from_string(raw, policy=email_policy)
-            sender    = sender    or _decode_mime_header(msg.get("From", ""))
-            subject   = subject   or _decode_mime_header(msg.get("Subject", ""))
-            parsed    = _extract_body_from_message(msg)
+            sender = sender or _decode_mime_header(msg.get("From", ""))
+            subject = subject or _decode_mime_header(msg.get("Subject", ""))
+            parsed = _extract_body_from_message(msg)
             body_text = (f"{body_text}\n{parsed}".strip() if body_text else parsed) if parsed else body_text
         except Exception:
             body_text = f"{body_text}\n{raw}".strip() if body_text else raw
@@ -473,6 +543,7 @@ def _extract_mail_fields(mail: dict) -> dict:
 
 
 OTP_CODE_PATTERN = r"(?<!\d)(\d{6})(?!\d)"
+
 
 def _extract_otp_code(content: str) -> str:
     if not content:
@@ -490,39 +561,9 @@ def _extract_otp_code(content: str) -> str:
     fallback = re.search(r"(?<!\d)(\d{6})(?!\d)", content)
     return fallback.group(1) if fallback else ""
 
-class ProxiedIMAP4_SSL(imaplib.IMAP4_SSL):
-    def __init__(self, host, port, proxy_host, proxy_port, proxy_type, **kwargs):
-        self.proxy_host  = proxy_host
-        self.proxy_port  = proxy_port
-        self.proxy_type  = proxy_type
-        self.timeout_val = kwargs.pop("timeout", 60)
-        super().__init__(host, port, **kwargs)
-
-    def _create_socket(self, timeout):
-        sock = socks.socksocket()
-        sock.set_proxy(self.proxy_type, self.proxy_host, self.proxy_port)
-        sock.settimeout(self.timeout_val)
-        sock.connect((self.host, self.port))
-        return sock
-
 
 def _create_imap_conn():
-    """建立 IMAP 连接（使用安全隔离的代理，防止多线程串台）。"""
-    default_proxy = cfg.DEFAULT_PROXY
-    if (cfg.USE_PROXY_FOR_EMAIL and default_proxy and
-            cfg.IMAP_SERVER.lower() == "imap.gmail.com"):
-        try:
-            parsed = urlparse(default_proxy)
-            proxy_host = parsed.hostname
-            proxy_port = parsed.port or 80
-            proxy_type = (socks.HTTP if parsed.scheme.lower() in ("http", "https") else socks.SOCKS5)
-            return ProxiedIMAP4_SSL(
-                cfg.IMAP_SERVER, cfg.IMAP_PORT,
-                proxy_host, proxy_port, proxy_type,
-                timeout=20
-            )
-        except Exception as e:
-            print(f"\n[{cfg.ts()}] [ERROR] IMAP 代理注入失败: {e}，回退到直连。")
+    """使用原生方式建立 IMAP 连接"""
     return imaplib.IMAP4_SSL(cfg.IMAP_SERVER, cfg.IMAP_PORT, timeout=15)
 
 
@@ -590,13 +631,12 @@ def _create_and_login_imap_conn():
         except Exception:
             pass
         raise
-
 def get_oai_code(
-    email: str,
-    jwt: str = "",
-    proxies: Any = None,
-    processed_mail_ids: set = None,
-    pattern: str = OTP_CODE_PATTERN,
+        email: str,
+        jwt: str = "",
+        proxies: Any = None,
+        processed_mail_ids: set = None,
+        pattern: str = OTP_CODE_PATTERN,
 ) -> str:
     """轮询各邮箱服务商收取 OpenAI 验证码，返回 6 位字符串或空串。"""
     mailbox_id = jwt
@@ -635,7 +675,7 @@ def get_oai_code(
                                    verify=_ssl_verify(), timeout=10)
                 if res.status_code == 200:
                     for mail_item in (res.json() or []):
-                        m_id   = mail_item.get("mail_id")
+                        m_id = mail_item.get("mail_id")
                         s_name = mail_item.get("sender_name", "").lower()
                         if m_id and m_id not in processed_mail_ids and "openai" in s_name:
                             detail_res = requests.get(
@@ -645,13 +685,13 @@ def get_oai_code(
                             )
                             if detail_res.status_code == 200:
                                 d = detail_res.json()
-                                body = (f"{d.get('subject','')}\n"
-                                        f"{d.get('content','')}\n"
-                                        f"{d.get('html','')}")
+                                body = (f"{d.get('subject', '')}\n"
+                                        f"{d.get('content', '')}\n"
+                                        f"{d.get('html', '')}")
                                 code = _extract_otp_code(body)
                                 if code:
                                     processed_mail_ids.add(m_id)
-                                    print(f"\n[{cfg.ts()}] [SUCCESS] 发现验证码: {code}")
+                                    print(f"\n[{cfg.ts()}] [SUCCESS] mail_curl ({mask_email(email)})邮箱提取成功: {code}")
                                     return code
 
             elif mode == "cloudmail":
@@ -668,14 +708,198 @@ def get_oai_code(
                             m_id = str(m.get("emailId"))
                             if m_id in processed_mail_ids:
                                 continue
-                            content = f"{m.get('subject','')}\n{m.get('text','')}"
+                            content = f"{m.get('subject', '')}\n{m.get('text', '')}"
                             if ("openai" in m.get("sendEmail", "").lower() or
                                     "openai" in content.lower()):
                                 code = _extract_otp_code(content)
                                 if code:
                                     processed_mail_ids.add(m_id)
-                                    print(f"\n[{cfg.ts()}] [SUCCESS] CloudMail 提取验证码成功: {code}")
+                                    print(f"\n[{cfg.ts()}] [SUCCESS] CloudMail ({mask_email(email)})邮箱提取成功: {code}")
                                     return code
+            elif mode == "duckmail":
+                duck_use_proxy = getattr(cfg, 'DUCK_USE_PROXY', True)
+                duck_proxies = proxies if duck_use_proxy else None
+                ds = DuckMailService(proxies=duck_proxies)
+                duck_run_mode = getattr(cfg, 'DUCKMAIL_MODE', 'duck_official')
+
+                if duck_run_mode == "duck_official":
+                    forward_mode = getattr(cfg, 'DUCKMAIL_FORWARD_MODE', 'Gmail_OAuth')
+                    forward_email = getattr(cfg, 'DUCKMAIL_FORWARD_EMAIL', '')
+                    if forward_mode == "Gmail_OAuth":
+                        otp_code = get_gmail_otp_via_oauth(email, mail_proxies)
+                        if otp_code:
+                            print(
+                                f"\n[{cfg.ts()}] [SUCCESS] Duck转发 (Gmail OAuth) ({mask_email(email)}) 提取成功: {otp_code}")
+                            return otp_code
+
+                    elif forward_mode == "cloudmail":
+                        if not forward_email:
+                            print(
+                                f"\n[{cfg.ts()}] [ERROR] Duckmail 运行失败: 未配置转发邮箱地址({forward_email})！")
+                            return ""
+                        token = get_cm_token(mail_proxies)
+                        if token:
+                            res = requests.post(
+                                f"{cfg.CM_API_URL}/api/public/emailList",
+                                headers={"Authorization": token},
+                                json={"toEmail": forward_email, "timeSort": "desc", "size": 10},
+                                proxies=mail_proxies, timeout=15,
+                            )
+                            if res.status_code == 200:
+                                for m in res.json().get("data", []):
+                                    m_id = str(m.get("emailId"))
+                                    if m_id in processed_mail_ids:
+                                        continue
+                                    content = f"{m.get('subject', '')}\n{m.get('text', '')}"
+                                    if "openai" not in m.get("sendEmail",
+                                                             "").lower() and "openai" not in content.lower():
+                                        continue
+
+                                    target_email = email.lower()
+                                    if target_email not in str(m).lower() and target_email not in content.lower():
+                                        continue
+
+                                    code = _extract_otp_code(content)
+                                    if code:
+                                        processed_mail_ids.add(m_id)
+                                        print(f"\n[{cfg.ts()}] [SUCCESS] Duck转发 (CloudMail) 提取成功: {code}")
+                                        return code
+
+
+                    elif forward_mode == "freemail":
+                        if not forward_email:
+                            print(f"\n[{cfg.ts()}] [ERROR] Duckmail 运行失败: 未配置转发邮箱地址(forward_email)！")
+                            return ""
+                        headers = {"Content-Type": "application/json",
+                                   "Authorization": f"Bearer {cfg.FREEMAIL_API_TOKEN}"}
+                        res = requests.get(f"{cfg.FREEMAIL_API_URL}/api/emails",
+                                           params={"mailbox": forward_email, "limit": 20},
+                                           headers=headers, proxies=mail_proxies,
+                                           verify=_ssl_verify(), timeout=15)
+                        if res.status_code == 200:
+                            raw_data = res.json()
+                            emails_list = (
+                                raw_data.get("data") or raw_data.get("emails") or raw_data.get("messages") or raw_data.get(
+                                    "results") or []
+                                if isinstance(raw_data, dict) else raw_data
+                            )
+                            if not isinstance(emails_list, list): emails_list = []
+                            for mail in emails_list:
+                                mail_id = str(mail.get("id") or mail.get("timestamp") or mail.get("subject") or "")
+                                if not mail_id or mail_id in processed_mail_ids: continue
+                                subject_text = str(mail.get("subject") or mail.get("title") or "")
+                                if "openai" not in subject_text.lower() and "openai" not in str(mail).lower():
+                                    continue
+                                try:
+                                    dr = requests.get(f"{cfg.FREEMAIL_API_URL}/api/email/{mail_id}",
+                                                      headers=headers, proxies=mail_proxies,
+                                                      verify=_ssl_verify(), timeout=15)
+                                    if dr.status_code == 200:
+                                        d = dr.json()
+                                        content = "\n".join(filter(None, [str(d.get("subject") or ""),
+                                                                          str(d.get("content") or ""),
+                                                                          str(d.get("html_content") or "")]))
+
+                                        target_email = email.lower()
+                                        if target_email not in str(d).lower() and target_email not in content.lower():
+                                            continue
+                                        code = _extract_otp_code(content)
+                                        if not code: code = str(d.get("code") or d.get("verification_code") or "")
+                                        if code:
+                                            processed_mail_ids.add(mail_id)
+                                            print(f"[{cfg.ts()}] [SUCCESS] Duck转发 (Freemail) 提取成功: {code}")
+                                            return code
+                                except Exception:
+                                    pass
+
+                    elif forward_mode == "mail_curl":
+                        if not forward_email:
+                            print(
+                                f"\n[{cfg.ts()}] [ERROR] Duckmail 运行失败: 未配置转发邮箱地址(forward_email)！")
+                            return ""
+                        inbox_url = f"{cfg.MC_API_BASE}/api/inbox?key={cfg.MC_KEY}&mailbox_id={forward_email}"
+                        res = requests.get(inbox_url, proxies=mail_proxies, verify=_ssl_verify(),
+                                           timeout=10)
+                        if res.status_code == 200:
+                            for mail_item in (res.json() or []):
+                                m_id = mail_item.get("mail_id")
+                                s_name = mail_item.get("sender_name", "").lower()
+                                if m_id and m_id not in processed_mail_ids and "openai" in s_name:
+                                    detail_res = requests.get(
+                                        f"{cfg.MC_API_BASE}/api/mail?key={cfg.MC_KEY}&id={m_id}",
+                                        proxies=mail_proxies, verify=_ssl_verify(), timeout=10)
+                                    if detail_res.status_code == 200:
+                                        d = detail_res.json()
+                                        body = f"{d.get('subject', '')}\n{d.get('content', '')}\n{d.get('html', '')}"
+                                        target_email = email.lower()
+                                        if target_email not in str(d).lower() and target_email not in body.lower():
+                                            continue
+
+                                        code = _extract_otp_code(body)
+                                        if code:
+                                            processed_mail_ids.add(m_id)
+                                            print(f"\n[{cfg.ts()}] [SUCCESS] Duck转发 (mail_curl) 提取成功: {code}")
+                                            return code
+                    elif forward_mode == "cloudflare_temp_email":
+                        if not forward_email:
+                            print(f"[{cfg.ts()}] [ERROR] Duckmail 运行失败: 未配置转发邮箱地址(forward_email)！")
+                            return ""
+                        res = requests.get(
+                            f"{cfg.GPTMAIL_BASE}/admin/mails",
+                            params={"limit": 20, "offset": 0, "address": forward_email},
+                            headers={"x-admin-auth": cfg.ADMIN_AUTH},
+                            verify=_ssl_verify(), timeout=15, proxies=mail_proxies,
+                        )
+
+                        if res.status_code == 200:
+                            results = res.json().get("results", [])
+                            for mail in results:
+                                m_id = mail.get("id")
+                                if not m_id or m_id in processed_mail_ids:
+                                    continue
+                                parsed = _extract_mail_fields(mail)
+                                sender_lower = str(parsed.get("sender", "")).lower()
+                                content = f"{parsed['subject']}\n{parsed['body']}".strip()
+                                if "openai" not in sender_lower and "openai" not in content.lower():
+                                    continue
+                                target_prefix = email.lower().split('@')[0]
+                                if target_prefix not in sender_lower and target_prefix not in content.lower():
+
+                                    continue
+                                code = _extract_otp_code(content)
+                                if code:
+                                    processed_mail_ids.add(m_id)
+                                    print(f"\n[{cfg.ts()}] [SUCCESS] Duck转发 (CF 临时邮箱) 提取成功: {code}")
+                                    return code
+                    else:
+                        pass
+
+                else:
+                    msgs = ds.get_messages(jwt)
+                    for m in msgs:
+                        content = f"{m.get('subject', '')}\n{m.get('text', '')}\n{ds.strip_html(m.get('html', ''))}"
+                        if "openai" in content.lower() or "chatgpt" in content.lower():
+                            code = _extract_otp_code(content)
+                            if code:
+                                print(
+                                    f"\n[{cfg.ts()}] [SUCCESS] Duck API ({mask_email(email)}) 提取成功: {code}")
+                                return code
+            elif mode == "generator_email":
+                if not jwt:
+                    print(f"\n[{cfg.ts()}] [ERROR] GeneratorEmail 缺少凭证 (surl)，无法提取验证码！")
+                    return ""
+                try:
+                    from utils.generator_email_service import GeneratorEmailService
+                    ge_service = GeneratorEmailService(proxies=mail_proxies)
+
+                    code = ge_service.get_verification_code(jwt)
+                    if code:
+                        processed_mail_ids.add(jwt)
+                        print(f"\n[{cfg.ts()}] [SUCCESS] GeneratorEmail ({mask_email(email)})邮箱提取成功: {code}")
+                        return code
+                except Exception as e:
+                    pass
+
             elif mode == "tempmail":
                 if not jwt:
                     print(f"\n[{cfg.ts()}] [ERROR] Tempmail 缺少 token，无法提取验证码！")
@@ -705,7 +929,7 @@ def get_oai_code(
                         code = _extract_otp_code(safe_content)
                         if code:
                             processed_mail_ids.add(msg_date)
-                            print(f"\n[{cfg.ts()}] [SUCCESS] Tempmail 提取验证码成功: {code}")
+                            print(f"\n[{cfg.ts()}] [SUCCESS] Tempmail ({mask_email(email)})邮箱提取成功: {code}")
                             return code
                 except Exception as e:
                     pass
@@ -732,10 +956,16 @@ def get_oai_code(
 
                         if code:
                             processed_mail_ids.add(msg_id)
-                            print(f"\n[{cfg.ts()}] [SUCCESS] TempMail.org 提取成功: {code}")
+                            print(f"\n[{cfg.ts()}] [SUCCESS] TempMail.org ({mask_email(email)})邮箱提取成功: {code}")
                             return code
                 except Exception as e:
                     pass
+
+            elif mode == "Gmail_OAuth":
+                otp_code = get_gmail_otp_via_oauth(email, mail_proxies)
+                if otp_code:
+                    print(f"\n[{cfg.ts()}] [SUCCESS] Gmail OAuth ({mask_email(email)}) 提取成功: {otp_code}")
+                    return otp_code
 
             elif mode == "imap":
                 print(
@@ -878,7 +1108,8 @@ def get_oai_code(
                     "Authorization": f"Bearer {cfg.FREEMAIL_API_TOKEN}"
                 }
 
-                res = requests.get(f"{cfg.FREEMAIL_API_URL.rstrip('/')}/api/emails", params={"mailbox": email, "limit": 20},
+                res = requests.get(f"{cfg.FREEMAIL_API_URL.rstrip('/')}/api/emails",
+                                   params={"mailbox": email, "limit": 20},
                                    headers=headers, proxies=mail_proxies, verify=_ssl_verify(), timeout=15)
                 if res.status_code == 200:
                     raw_data = res.json()
@@ -920,7 +1151,7 @@ def get_oai_code(
                                 pass
                         if code:
                             processed_mail_ids.add(mail_id)
-                            print(f"[{cfg.ts()}] [SUCCESS] 提取成功: {code}")
+                            print(f"[{cfg.ts()}] [SUCCESS] freemail ({mask_email(email)})邮箱提取成功: {code}")
                             return code
             elif mode == "luckmail":
                 if not jwt:
@@ -933,7 +1164,7 @@ def get_oai_code(
                     code = lm_service.get_code(jwt)
                     if code:
                         processed_mail_ids.add(jwt)
-                        print(f"\n[{cfg.ts()}] [SUCCESS] LuckMail 提取验证码成功: {code}")
+                        print(f"\n[{cfg.ts()}] [SUCCESS] LuckMail ({mask_email(email)})邮箱提取验证码成功: {code}")
                         return code
                 except Exception as e:
                     pass
@@ -957,7 +1188,7 @@ def get_oai_code(
                         proxies=mail_proxies, verify=_ssl_verify(), timeout=15,
                     )
                 if res.status_code != 200:
-                    print(f"\n[{cfg.ts()}] [ERROR] 邮箱接口请求失败 (HTTP {res.status_code}): {res.text}")
+                    print(f"\n[{cfg.ts()}] [ERROR] ({mask_email(email)})邮箱接口请求失败 (HTTP {res.status_code}): {res.text}")
                     time.sleep(3)
                     continue
                 results = res.json().get("results")
@@ -966,7 +1197,7 @@ def get_oai_code(
                         mail_id = mail.get("id")
                         if not mail_id or mail_id in processed_mail_ids:
                             continue
-                        parsed  = _extract_mail_fields(mail)
+                        parsed = _extract_mail_fields(mail)
                         content = f"{parsed['subject']}\n{parsed['body']}".strip()
                         if ("openai" not in parsed["sender"].lower() and
                                 "openai" not in content.lower()):
@@ -974,7 +1205,7 @@ def get_oai_code(
                         m = re.search(pattern, content)
                         if m:
                             processed_mail_ids.add(mail_id)
-                            print(f"[{cfg.ts()}] [SUCCESS] 提取成功: {m.group(1)}")
+                            print(f"[{cfg.ts()}] [SUCCESS] ({mask_email(email)})邮箱提取成功: {m.group(1)}")
                             return m.group(1)
                     pass
                 else:
@@ -989,5 +1220,5 @@ def get_oai_code(
             print(f"[{cfg.ts()}] [INFO] 仍在查询邮箱，暂未收到验证码 (已尝试 {attempt}/20)...")
         time.sleep(3)
 
-    print(f"\n[{cfg.ts()}] [ERROR] 接收验证码超时")
+    print(f"\n[{cfg.ts()}] [ERROR] ({mask_email(email)})邮箱接收验证码超时")
     return ""

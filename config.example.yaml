@@ -68,6 +68,17 @@ mail_curl:
   api_base: "https://your-domain.com"
   key: "" # 你的密钥
 
+# [DuckMail 鸭子邮箱配置]
+duckmail:
+  # 你的鸭子邮箱 API 地址，默认为官方公共接口
+  api_url: "https://api.duckmail.com"
+  # 专属域名 (如 duck.com)，留空则随机使用官方支持的域名
+  domain: ""
+  mode: duck_official
+  duck_api_token:
+  forward_mode: Gmail_OAuth
+  forward_email: ''
+# [luckmail 鸭子邮箱配置]
 luckmail:
   api_key: ""
   preferred_domain: ""
@@ -188,12 +199,17 @@ sub2api_mode:
   api_key: 
   min_accounts_threshold: 20
   batch_reg_count: 1
-  min_remaining_weekly_percent: 80
   remove_on_limit_reached: true
   remove_dead_accounts: true
   enable_token_revive: false
   check_interval_minutes: 60
   threads: 10
+  account_concurrency: 10
+  account_load_factor: 10
+  account_priority: 1
+  account_rate_multiplier: 1.0
+  account_group_ids: ""
+  enable_ws_mode: true
 
 hero_sms:
   enabled: false
@@ -216,9 +232,15 @@ normal_mode:
   sleep_max: 30
   # 单次(每批)执行的注册总数
   target_count: 2
+
+tg_bot:
+  enable: false
+  token: ''
+  chat_id: ''
+
 # WEB端密码
 web_password: admin
 #CF账号
 cf_api_email: 
 #CF KEY
-cf_api_key: 
+cf_api_key:

@@ -149,7 +149,7 @@
                 <div class="flex-1 overflow-y-auto p-3 md:p-6 bg-gray-100 relative">
                     <div class="w-full xl:max-w-[80%] mx-auto">
                         
-                        <button v-show="['email', 'proxy', 'relay', 'concurrency', 'sms'].includes(currentTab)" @click="saveConfig"
+                        <button v-show="['email', 'proxy', 'relay', 'concurrency', 'sms', 'notify'].includes(currentTab)" @click="saveConfig"
                                 class="fixed bottom-4 right-4 md:bottom-8 md:right-8 z-50 px-4 md:px-6 py-2.5 md:py-3 bg-indigo-600 text-white text-xs md:text-sm font-extrabold rounded-full shadow-2xl hover:bg-indigo-700 transition transform hover:-translate-y-1 flex items-center gap-2 ring-4 ring-indigo-600/30">
                             <span>💾</span> <span class="hidden sm:inline">保存并热重载配置</span><span class="sm:hidden">保存</span>
                         </button>
@@ -406,12 +406,15 @@
                                 <select v-model="config.email_api_mode" @change="if(!['freemail', 'imap', 'cloudmail', 'cloudflare_temp_email'].includes(config.email_api_mode)) config.enable_sub_domains = false;" class="form-input bg-gray-50 font-bold text-blue-700 shadow-sm cursor-pointer transition">
                                     <option value="cloudflare_temp_email">cloudflare_temp_email (CF 临时邮箱)</option>
                                     <option value="imap">imap (直连收件箱)</option>
+                                    <option value="Gmail_OAuth">Gmail_OAuth</option>
                                     <option value="freemail">freemail</option>
                                     <option value="cloudmail">cloudmail</option>
                                     <option value="mail_curl">mail_curl</option>
                                     <option value="luckmail">luckmail (LuckMail 接码)</option>
                                     <option value="tempmail">Tempmail.lol</option>
                                     <option value="tempmail_org">tempmail_org</option>
+                                    <option value="duckmail">duckmail (DuckMail 鸭子邮箱)</option>
+                                    <option value="generator_email">generator_email</option>
                                 </select>
 
                                 <label class="form-label mt-4">发信域名池 (mail_domains)</label>
@@ -577,7 +580,7 @@
                                     <input type="text" v-model="config.imap.server" class="form-input text-sm">
                                     <div class="grid grid-cols-2 gap-3 md:gap-4">
                                         <div><label class="form-label">端口</label><input type="number" v-model.number="config.imap.port" class="form-input text-sm"></div>
-                                        <div><label class="form-label">接收账号</label><input type="text" v-model="config.imap.user" class="form-input text-sm"></div>
+                                        <div><label class="form-label">接收邮箱</label><input type="text" v-model="config.imap.user" class="form-input text-sm"></div>
                                     </div>
                                     <label class="form-label mt-3 md:mt-4">应用专用密码</label>
                                     <div class="relative mb-2">
@@ -586,8 +589,89 @@
                                             {{ showPwd.imap ? '👁️' : '🙈' }}
                                         </button>
                                     </div>
+                                    <div class="text-[10px] md:text-xs text-red-700 mt-3 font-bold bg-red-100 p-2 rounded leading-relaxed">
+                                        <p>点这里跳转页面：<br><a href="https://myaccount.google.com/apppasswords" class="underline break-all" target="_blank">创建谷歌专属密码</a></p>
+                                    </div>
                                 </div>
+                                <div v-if="config.email_api_mode === 'Gmail_OAuth'" class="mt-6 border-t-2 border-dashed border-gray-200 pt-6">
+                                    <div class="flex items-center gap-2 mb-6">
+                                        <span class="flex items-center justify-center w-6 h-6 bg-indigo-600 text-white rounded-full text-xs font-black">?</span>
+                                        <h3 class="text-base font-black text-gray-800">Gmail OAuth 2.0 自动化配置向导</h3>
+                                    </div>
 
+                                    <div class="space-y-8">
+                                        <div class="relative pl-8 pb-4 border-l-2 border-indigo-100">
+                                            <div class="absolute -left-[11px] top-0 w-5 h-5 bg-white border-4 border-indigo-600 rounded-full"></div>
+                                            <p class="text-xs font-black text-indigo-600 uppercase mb-2">Step 1: 创建项目与 API 启用</p>
+                                            <div class="text-[13px] text-gray-600 space-y-2 leading-relaxed">
+                                                <p>1. 访问 <a href="https://console.cloud.google.com/" target="_blank" class="text-blue-600 underline font-bold">Google Cloud 控制台</a>。</p>
+                                                <p>2. 点击顶部项目选择器，选择 <b>"New Project" (新建项目)</b>，命名为 <code>OpenAI-CPA-Mail</code>。</p>
+                                                <p>3. 搜索框里搜索 <b>"Gmail API"</b> 然后点启用(ENABLE)，启用过就点管理。</p>
+                                            </div>
+                                        </div>
+
+                                        <div class="relative pl-8 pb-4 border-l-2 border-indigo-100">
+                                            <div class="absolute -left-[11px] top-0 w-5 h-5 bg-white border-4 border-indigo-600 rounded-full"></div>
+                                            <p class="text-xs font-black text-indigo-600 uppercase mb-2">Step 2: 配置 OAuth 权限请求页面 </p>
+                                            <div class="text-[13px] text-gray-600 space-y-2 bg-yellow-50 p-3 rounded-lg border border-yellow-100">
+                                                <p>这是最关键的一步，决定谁能授权你的程序：</p>
+                                                <ul class="list-disc ml-4 space-y-1">
+                                                    <li>选择 <b>左侧菜单 OAuth 权限请求页面->开始</b>。</li>
+                                                    <li><b>应用名称</b>：随便起，比如 OpenAI-CPA</li>
+                                                    <li><b>用户支持电子邮件：</b>：填你自己的 Gmail 地址。</li>
+                                                    <li><b>开发者联系信息：</b>：填你自己的 Gmail 地址。</li>
+                                                    <li>出现内部和外部选择记得选择"外部"</li>
+                                                </ul>
+                                            </div>
+                                        </div>
+
+                                        <div class="relative pl-8 pb-4 border-l-2 border-indigo-100">
+                                            <div class="absolute -left-[11px] top-0 w-5 h-5 bg-white border-4 border-indigo-600 rounded-full"></div>
+                                            <p class="text-xs font-black text-indigo-600 uppercase mb-2">Step 3: 创建凭据 (Credentials)</p>
+                                            <div class="text-[13px] text-gray-600 space-y-2">
+                                                <p>1. 点击左侧 <b>"目标对象" > "测试用户" > "Add users"</b>。添加你自己的Gmail邮箱</p>
+                                                <p>2. 点击左侧 <b>"数据访问" > "添加或移除范围" > "右边手动添加范围"</b>。填入https://www.googleapis.com/auth/gmail.modify，点击 “添加到表” 并 “更新”</p>
+                                                <p>3. 点击左侧 <b>"客户端" > "创建客户端" > "选择桌面应用程序"</b>。创建</p>
+                                                <p>4. 创建成功后，页面会弹出一个包含客户端 ID 和密钥的窗口。直接点击旁边的 “下载 JSON” 按钮。</p>
+                                                <p>5. 下载生成的 JSON 文件，改名为 <code>credentials.json</code>，上传至本项目 <code>/data/</code> 目录。</p>
+                                            </div>
+                                        </div>
+
+                                        <div class="relative pl-8">
+                                            <div class="absolute -left-[11px] top-0 w-5 h-5 bg-white border-4 border-green-500 rounded-full shadow-[0_0_8px_rgba(34,197,94,0.4)]"></div>
+                                            <p class="text-xs font-black text-green-600 uppercase mb-2">Step 4: 最终激活授权</p>
+
+                                            <div class="flex flex-col gap-4 bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+                                                <div class="flex items-center justify-between gap-4">
+                                                    <p class="text-[13px] text-gray-600 flex-1">点击生成按钮并在浏览器完成登录，复制地址栏 <code>code=</code> 后的字符。</p>
+                                                    <button @click="getGmailAuthUrl" :disabled="gmailOAuth.isGenerating"
+                                                            class="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition flex items-center gap-2 shrink-0 shadow-md">
+                                                        <span v-if="gmailOAuth.isGenerating" class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                                                        <span>🔗 生成授权链接</span>
+                                                    </button>
+                                                </div>
+
+                                                <div v-if="gmailOAuth.authUrl" class="p-3 bg-indigo-50 border border-indigo-100 rounded-lg animate-fade-in">
+                                                    <p class="text-[10px] text-indigo-500 mb-1">复制链接并在浏览器打开授权：</p>
+                                                    <a :href="gmailOAuth.authUrl" target="_blank" class="text-xs text-blue-600 underline break-all font-mono block">
+                                                        {{ gmailOAuth.authUrl }}
+                                                    </a>
+                                                </div>
+
+                                                <div class="flex gap-2">
+                                                    <input type="text" v-model="gmailOAuth.pastedCode"
+                                                           class="form-input flex-1 mb-0 border-green-200 text-sm font-mono focus:ring-green-500"
+                                                           placeholder="在此粘贴授权后的 code= 字符串">
+                                                    <button @click="submitGmailAuthCode" :disabled="gmailOAuth.isLoading || !gmailOAuth.pastedCode"
+                                                            class="px-6 py-2 bg-green-600 text-white text-xs font-black rounded-lg hover:bg-green-700 transition shadow-lg disabled:opacity-50">
+                                                        <span v-if="gmailOAuth.isLoading" class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin inline-block mr-1"></span>
+                                                        保存并同步
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                                 <div v-if="config.email_api_mode === 'freemail' && config.freemail">
                                     <p class="text-xs md:text-sm text-yellow-700 mb-3 md:mb-4 font-bold bg-yellow-100 inline-block px-2 py-1 rounded">当前: Freemail API</p>
                                     <label class="form-label">访问链接：</label>
@@ -638,6 +722,65 @@
                                     </div>
                                 </div>
 
+                                <div v-if="config.email_api_mode === 'duckmail'" class="space-y-4">
+                                    <div class="p-4 bg-blue-50 border border-blue-200 rounded-xl shadow-sm">
+                                        <label class="form-label text-blue-800 font-bold text-sm">配合收件的临时邮箱模式 (必选)</label>
+                                        <p class="text-[10px] md:text-xs text-blue-600 mb-2 font-medium">
+                                            💡 请选择 Duckmail 转发到的目标邮箱类型。<br>
+                                            <span class="text-red-500">⚠️ 必须先去左侧对应的邮箱菜单里填写好该平台的 API 密钥等参数并保存生效！</span>
+                                        </p>
+                                        <select v-model="config.duckmail.forward_mode" class="form-input bg-white text-sm border-blue-300 font-bold text-blue-700">
+                                            <option value="Gmail_OAuth">Gmail_OAuth (谷歌授权转收)</option>
+<!--                                            <option value="cloudflare_temp_email">cloudflare_temp_email (API转收)</option>-->
+<!--                                            <option value="freemail">Freemail (API转收)</option>-->
+<!--                                            <option value="cloudmail">CloudMail (API转收)</option>-->
+<!--                                            <option value="mail_curl">Mail Curl (API转收)</option>-->
+                                        </select>
+
+                                        <div v-if="config.duckmail.forward_mode !== 'Gmail_OAuth'" class="mt-3">
+                                            <label class="form-label text-blue-800 font-bold text-sm">填入你在 Duckmail 的转发地址收件箱 (必填)</label>
+                                            <input type="text" v-model="config.duckmail.forward_email" class="form-input text-sm border-blue-300" placeholder="例如: your-real-email@cloudmail.com">
+                                            <p class="text-[10px] text-gray-500 mt-1">系统将通过此地址去您选择的平台拉取验证码。</p>
+                                        </div>
+                                    </div>
+                                    <label class="form-checkbox-label mb-3 p-2.5 md:p-3 bg-white rounded-lg border border-gray-200 items-center shadow-sm">
+                                        <input type="checkbox" v-model="config.duckmail.use_proxy" class="form-checkbox mt-0 text-blue-600">
+                                        <div class="ml-2">
+                                            <span class="font-bold text-gray-800 text-xs md:text-sm">Duck 官方接口使用代理</span>
+                                            <p class="text-[10px] md:text-xs text-gray-500 mt-0.5">仅针对 Duck API 生效。上方的配合的转发邮箱依然跟随系统左侧的"全局邮箱代理"开关。</p>
+                                        </div>
+                                    </label>
+                                    <label class="form-label">运行模式</label>
+                                    <select v-model="config.duckmail.mode" class="form-input text-sm">
+                                        <option value="custom_api">自定义 API</option>
+                                        <option value="duck_official">Duck 官方模式 (兼容 Token/Cookie)</option>
+                                    </select>
+
+                                    <div v-if="config.duckmail.mode === 'duck_official'" class="p-4 bg-indigo-50 border border-indigo-200 rounded-xl">
+                                        <div class="mb-3 text-[11px] text-indigo-600">
+                                            💡 提示：填入 <b>API Token</b> 即可直接使用；若填入 <b>Cookie</b>，系统可在 Token 失效时自动刷新。
+                                        </div>
+                                        <label class="form-label text-xs">API Token authorization(必填) 不带Bearer</label>
+                                        <input type="text" v-model="config.duckmail.duck_api_token" class="form-input text-xs" placeholder="Bearer Token">
+                                        <label class="form-label text-xs mt-3">Cookie (选填，用于自动续期)</label>
+                                        <textarea v-model="config.duckmail.duck_cookie" class="form-input text-xs h-20" placeholder="d_id=...; vqd=..."></textarea>
+                                    </div>
+
+                                    <div v-else class="p-4 bg-green-50 border border-green-200 rounded-xl">
+                                        <label class="form-label text-xs">API Base URL</label>
+                                        <input type="text" v-model="config.duckmail.api_url" class="form-input text-xs">
+                                        <label class="form-label text-xs mt-3">指定后缀域名 (选填)</label>
+                                        <input type="text" v-model="config.duckmail.domain" class="form-input text-xs" placeholder="如 my-domain.com">
+                                    </div>
+                                </div>
+                                <div v-if="config.email_api_mode === 'generator_email'" class="space-y-4 mt-2">
+                                    <p class="text-xs md:text-sm text-yellow-700 font-bold bg-yellow-100 inline-block px-2 py-1 rounded">当前: Generator.email</p>
+                                    <div class="text-[11px] md:text-xs text-green-700 font-bold bg-green-50 border border-green-200 p-3 rounded-lg leading-relaxed shadow-sm">
+                                        <p class="flex items-center gap-1"><span>✅</span> 已接入 Generator.email</p>
+                                        <p class="mt-1 text-green-600">系统将请求获取邮箱，并提取验证码。</p>
+                                        <p class="mt-2 text-red-600 font-black">提示：此站可能存在强力的 Cloudflare 盾，建议开启“获取邮箱使用全局代理穿透”并使用优质代理。</p>
+                                    </div>
+                                </div>
                                 <div v-if="config.email_api_mode === 'luckmail' && config.luckmail" class="space-y-4">
                                     <div class="flex flex-wrap items-center justify-between gap-2">
                                         <p class="text-xs md:text-sm text-yellow-700 font-black bg-yellow-100 px-3 py-1 rounded-full border border-yellow-200 shadow-sm">
@@ -1003,7 +1146,7 @@
                                         <div><label class="form-label text-[11px] md:text-sm">巡检间隔(分)</label><input type="number" v-model.number="config.cpa_mode.check_interval_minutes" class="form-input text-sm"></div>
                                         <div><label class="form-label text-[11px] md:text-sm">测活并发数</label><input type="number" v-model.number="config.cpa_mode.threads" class="form-input text-sm"></div>
 
-                                        <div class="col-span-2 bg-red-50 p-3 md:p-5 rounded-xl border border-red-100 mt-1 md:mt-2 flex flex-col md:flex-row gap-4 md:gap-6">
+                                        <div class="col-span-2 bg-red-50 p-3 md:p-5 rounded-xl border border-red-100 mt-1 md:mt-2 flex flex-col md:flex-row gap-4 md:gap-6" data-mode="cpa">
                                             <div class="w-full md:w-1/3">
                                                 <label class="form-label text-red-800 font-bold text-xs md:text-sm">周限额剔除阈值(%)</label>
                                                 <input type="number" v-model.number="config.cpa_mode.min_remaining_weekly_percent" class="form-input border-red-300 font-black text-red-600 text-base md:text-xl text-center">
@@ -1064,12 +1207,68 @@
                                         <div><label class="form-label text-[11px] md:text-sm">巡检间隔(分)</label><input type="number" v-model.number="config.sub2api_mode.check_interval_minutes" class="form-input text-sm"></div>
                                         <div><label class="form-label text-[11px] md:text-sm">测活并发数</label><input type="number" v-model.number="config.sub2api_mode.threads" class="form-input text-sm"></div>
 
-                                        <div class="col-span-2 bg-red-50 p-3 md:p-5 rounded-xl border border-red-100 mt-1 md:mt-2 flex flex-col md:flex-row gap-4 md:gap-6">
-                                            <div class="w-full md:w-1/3">
-                                                <label class="form-label text-red-800 font-bold text-xs md:text-sm">周限额剔除阈值(%)</label>
-                                                <input type="number" v-model.number="config.sub2api_mode.min_remaining_weekly_percent" class="form-input border-red-300 font-black text-red-600 text-base md:text-xl text-center">
+                                        <div class="col-span-2 bg-purple-50 p-4 md:p-5 rounded-xl border border-purple-200 mt-1 space-y-4">
+                                            <h4 class="text-xs md:text-sm font-bold text-purple-800 flex items-center gap-2 pb-2 border-b border-purple-200">
+                                                <span>✨</span> 新账号推送参数
+                                            </h4>
+
+                                            <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+                                                <div>
+                                                    <label class="form-label text-[10px] md:text-xs text-purple-700 font-bold">并发数</label>
+                                                    <span class="text-[9px] text-purple-400 block mb-1">账号并发上限</span>
+                                                    <input type="number" min="1" v-model.number="config.sub2api_mode.account_concurrency" class="form-input border-purple-200 text-sm mb-0 font-mono">
+                                                </div>
+                                                <div>
+                                                    <label class="form-label text-[10px] md:text-xs text-purple-700 font-bold">负载因子</label>
+                                                    <span class="text-[9px] text-purple-400 block mb-1">提高账号调度频率</span>
+                                                    <input type="number" min="1" v-model.number="config.sub2api_mode.account_load_factor" class="form-input border-purple-200 text-sm mb-0 font-mono">
+                                                </div>
+                                                <div>
+                                                    <label class="form-label text-[10px] md:text-xs text-purple-700 font-bold">优先级</label>
+                                                    <span class="text-[9px] text-purple-400 block mb-1">数值越小越优先使用</span>
+                                                    <input type="number" min="1" v-model.number="config.sub2api_mode.account_priority" class="form-input border-purple-200 text-sm mb-0 font-mono">
+                                                </div>
+                                                <div>
+                                                    <label class="form-label text-[10px] md:text-xs text-purple-700 font-bold">账号计费倍率</label>
+                                                    <span class="text-[9px] text-purple-400 block mb-1">0 = 不计费</span>
+                                                    <input type="number" step="0.1" min="0" v-model.number="config.sub2api_mode.account_rate_multiplier" class="form-input border-purple-200 text-sm mb-0 font-mono">
+                                                </div>
                                             </div>
-                                            <div class="w-full md:w-2/3 flex flex-col justify-center space-y-2 md:space-y-3">
+                                            <div>
+                                                <label class="form-label text-[10px] md:text-xs text-purple-700 font-bold">WS mode</label>
+                                                <p class="text-[9px] text-purple-400 mb-1.5">仅对 OpenAI OAuth 账号生效。启用后并发数将作为该账号 WS 连接池上限。</p>
+                                                <select v-model="config.sub2api_mode.enable_ws_mode" class="form-input border-purple-200 bg-white font-bold text-purple-800 text-sm mb-0 max-w-xs">
+                                                    <option :value="false">关闭 (off)</option>
+                                                    <option :value="true">透传 (passthrough)</option>
+                                                </select>
+                                            </div>
+
+                                            <div>
+                                                <div class="flex items-center gap-2 mb-2">
+                                                    <label class="form-label text-[10px] md:text-xs text-purple-700 font-bold mb-0">绑定分组</label>
+                                                    <button @click="fetchSub2ApiGroups" :disabled="isLoadingSub2APIGroups"
+                                                            class="px-2.5 py-1 bg-purple-600 text-white text-[10px] md:text-xs font-bold rounded-lg hover:bg-purple-700 transition flex items-center gap-1 disabled:opacity-50 shadow-sm">
+                                                        <span :class="{'animate-spin inline-block': isLoadingSub2APIGroups}">{{ isLoadingSub2APIGroups ? '🔄' : '🔍' }}</span>
+                                                        {{ isLoadingSub2APIGroups ? '获取中...' : '获取分组' }}
+                                                    </button>
+                                                    <span v-if="config.sub2api_mode.account_group_ids" class="text-[10px] text-purple-500 font-mono bg-purple-100 rounded px-2 py-0.5">
+                                                        已选: {{ config.sub2api_mode.account_group_ids }}
+                                                    </span>
+                                                </div>
+                                                <div v-if="sub2apiGroups.length > 0" class="flex flex-wrap gap-2">
+                                                    <label v-for="group in sub2apiGroups" :key="group.id"
+                                                           class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border cursor-pointer transition text-xs font-bold select-none"
+                                                           :class="isGroupSelected(group.id) ? 'bg-purple-600 text-white border-purple-600 shadow-sm' : 'bg-white text-purple-700 border-purple-300 hover:bg-purple-50'">
+                                                        <input type="checkbox" class="sr-only" @change="toggleGroup(group.id)">
+                                                        {{ group.name }}
+                                                    </label>
+                                                </div>
+                                                <p v-else class="text-[10px] text-gray-400 italic">填写接口地址和 API Key 并保存后，点击「获取分组」</p>
+                                            </div>
+                                        </div>
+
+                                        <div class="col-span-2 bg-red-50 p-3 md:p-5 rounded-xl border border-red-100 mt-1 md:mt-2 flex flex-col gap-3">
+                                            <div class="flex flex-col md:flex-row gap-3">
                                                 <label class="form-checkbox-label text-red-800 mb-0 bg-white p-1.5 md:p-2 rounded border border-red-100 items-center">
                                                     <input type="checkbox" v-model="config.sub2api_mode.remove_on_limit_reached" class="form-checkbox m-0 text-red-600">
                                                     <span class="text-[11px] md:text-sm font-bold ml-2">耗尽自动物理删除</span>
@@ -1082,17 +1281,53 @@
                                                     <input type="checkbox" v-model="config.sub2api_mode.enable_token_revive" class="form-checkbox m-0 text-blue-600">
                                                     <span class="text-[11px] md:text-sm font-bold ml-2">尝试 Token 复活</span>
                                                 </label>
-                                                <label class="form-checkbox-label text-cyan-800 mb-0 bg-cyan-50 p-1.5 md:p-2 rounded border border-cyan-100 items-center">
-                                                    <input type="checkbox" v-model="config.sub2api_mode.auto_check" class="form-checkbox m-0 text-cyan-600">
-                                                    <span class="text-[11px] md:text-sm font-bold ml-2">补货前自动巡检测活</span>
-                                                </label>
                                             </div>
+                                            <label class="form-checkbox-label text-cyan-800 mb-0 bg-cyan-50 p-1.5 md:p-2 rounded border border-cyan-100 items-center">
+                                                <input type="checkbox" v-model="config.sub2api_mode.auto_check" class="form-checkbox m-0 text-cyan-600">
+                                                <span class="text-[11px] md:text-sm font-bold ml-2">补货前自动巡检测活</span>
+                                            </label>
                                         </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
+                        <div v-show="currentTab === 'notify'" v-if="config" class="space-y-4 md:space-y-6">
+                            <div class="config-card border-t-4 border-blue-400 lg:max-w-2xl">
+                                <h3 class="config-title">✈️ Telegram 机器人通知</h3>
+                                <div class="bg-blue-50 p-3 md:p-4 rounded-xl border border-blue-200">
+                                    <label class="form-checkbox-label font-bold text-blue-900 mb-2 md:mb-3 items-center">
+                                        <input type="checkbox" v-model="config.tg_bot.enable" class="form-checkbox m-0 text-blue-600 w-4 h-4 md:w-5 md:h-5">
+                                        <span class="ml-2 text-sm md:text-base">开启 TG 消息推送</span>
+                                    </label>
 
+                                    <div class="flex flex-col gap-3 mt-2" :class="{'opacity-50 pointer-events-none grayscale': !config.tg_bot.enable}">
+                                        <div>
+                                            <label class="form-label text-blue-800 text-xs md:text-sm">Bot Token</label>
+                                            <input type="text" v-model="config.tg_bot.token" class="form-input mb-0 text-sm font-mono border-blue-200" placeholder="形如 123456:AAH...">
+                                        </div>
+                                        <div>
+                                            <label class="form-label text-blue-800 text-xs md:text-sm">Chat ID (接收者)</label>
+                                            <input type="text" v-model="config.tg_bot.chat_id" class="form-input mb-0 text-sm font-mono border-blue-200" placeholder="你的 TG 用户ID">
+                                            <p class="text-[10px] text-blue-500 mt-1.5 italic">* 系统在推送消息时会自动走全局配置里的网络代理</p>
+                                        </div>
+                                        <div class="mt-2 border-t border-blue-200 pt-3">
+                                            <label class="form-label text-blue-800 text-xs md:text-sm font-bold">🎉 单号产出通知模板</label>
+                                            <textarea v-model="config.tg_bot.template_success" class="form-input mb-0 text-xs font-mono h-20 md:h-24 border-blue-200" placeholder="填入单号成功模板"></textarea>
+                                            <p class="text-[10px] text-blue-500 mt-1.5 leading-relaxed">
+                                                可用变量: <code>{email}</code> 账号, <code>{password}</code> 密码。<br>支持 HTML 标签如 <code>&lt;b&gt;加粗&lt;/b&gt;</code>, <code>&lt;code&gt;复制块&lt;/code&gt;</code>。
+                                            </p>
+                                        </div>
+                                        <div class="mt-2">
+                                            <label class="form-label text-blue-800 text-xs md:text-sm font-bold">🛑 运行总结/停止通知模板</label>
+                                            <textarea v-model="config.tg_bot.template_stop" class="form-input mb-0 text-xs font-mono h-24 md:h-28 border-blue-200" placeholder="填入总结模板"></textarea>
+                                            <p class="text-[10px] text-blue-500 mt-1.5 leading-relaxed">
+                                                可用变量: <code>{success_rate}</code> 成功率, <code>{success}</code> 成功数, <code>{target}</code> 目标数, <code>{failed}</code> 失败数, <code>{retries}</code> 拦截数, <code>{elapsed_time}</code> 总耗时, <code>{avg_time}</code> 平均耗时。
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                         <div v-show="currentTab === 'concurrency'" v-if="config" class="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
                             
                             <div class="config-card border-t-4 border-gray-400">

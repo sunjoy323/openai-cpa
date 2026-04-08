@@ -8,6 +8,7 @@ import secrets
 import string
 import time
 import traceback
+import uuid
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime
@@ -455,6 +456,7 @@ def _challenge_token(
     proxies: Any = None,
     *,
     use: bool = False,
+    ctx: Optional[dict] = None,
 ) -> str:
     did = session.cookies.get("oai-did") or ""
     if _authcore_generate_payload is not None and did:
@@ -464,13 +466,20 @@ def _challenge_token(
                 proxy_url = str(proxies.get("https") or proxies.get("http") or "").strip()
             else:
                 proxy_url = str(proxies or "").strip()
-            token = _authcore_generate_payload(
+            payload_kwargs = dict(
                 did=did,
                 flow=flow,
                 proxy=proxy_url,
                 user_agent=session.headers.get("User-Agent"),
                 impersonate="chrome110",
             )
+            if ctx is not None:
+                payload_kwargs["ctx"] = ctx
+            try:
+                token = _authcore_generate_payload(**payload_kwargs)
+            except TypeError:
+                payload_kwargs.pop("ctx", None)
+                token = _authcore_generate_payload(**payload_kwargs)
             token = str(token or "").strip()
             if token:
                 return token
@@ -662,7 +671,7 @@ def submit_callback_url(
     }
     return json.dumps(config_obj, ensure_ascii=False, separators=(",", ":"))
 
-def _generate_password(length: int = 16) -> str:
+def _generate_password(length: int = 20) -> str:
     upper    = random.choices(string.ascii_uppercase, k=2)
     lower    = random.choices(string.ascii_lowercase, k=2)
     digits   = random.choices(string.digits, k=2)
@@ -825,6 +834,9 @@ def _retry_oauth_login_flow(
         s_log = requests.Session(proxies=proxies, impersonate="chrome110")
         oauth_log = generate_oauth_url()
         oauth_trace = []
+        log_ctx = {"session_id": str(uuid.uuid4())}
+        now_ms = int(time.time() * 1000)
+        log_ctx["time_origin"] = float(now_ms - random.randint(20000, 300000))
 
         resp, current_url = _follow_redirect_chain_local(
             s_log, oauth_log.auth_url, proxies, trace=oauth_trace, stage="oauth_start"
@@ -841,7 +853,7 @@ def _retry_oauth_login_flow(
                 ),
             )
 
-        sentinel_log = _challenge_token(s_log, "authorize_continue", proxies)
+        sentinel_log = _challenge_token(s_log, "authorize_continue", proxies, ctx=log_ctx)
         log_start_headers = _oai_headers(
             s_log.cookies.get("oai-did") or "",
             {
@@ -900,7 +912,7 @@ def _retry_oauth_login_flow(
             s_log, pwd_page_url, proxies, trace=oauth_trace, stage="password_page"
         )
 
-        sentinel_pwd = _challenge_token(s_log, "password_verify", proxies)
+        sentinel_pwd = _challenge_token(s_log, "password_verify", proxies, ctx=log_ctx)
         login_pwd_headers = _oai_headers(
             s_log.cookies.get("oai-did") or "",
             {
@@ -958,19 +970,48 @@ def _retry_oauth_login_flow(
         )
 
         if current_url.endswith("/email-verification"):
+            print(f"\n[{cfg.ts()}] [INFO] 静默登录需要验证码，主动触发发送...")
+            send_otp_url = "https://auth.openai.com/api/accounts/email-otp/send"
+            try:
+                sentinel_log_send = _challenge_token(s_log, "authorize_continue", proxies, ctx=log_ctx)
+                log_send_headers = _oai_headers(
+                    s_log.cookies.get("oai-did") or "",
+                    {"Referer": current_url, "content-type": "application/json"},
+                )
+                if sentinel_log_send:
+                    log_send_headers["openai-sentinel-token"] = sentinel_log_send
+                _post_with_retry(
+                    s_log,
+                    send_otp_url,
+                    headers=log_send_headers,
+                    json_body={},
+                    proxies=proxies,
+                    timeout=30,
+                )
+            except Exception as e:
+                print(f"[{cfg.ts()}] [WARNING] 登录 OTP 发送请求异常: {e}")
+
             code2 = ""
             for resend_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
                 if resend_attempt > 0:
                     print(f"\n[{cfg.ts()}] [INFO] 正在重试 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
                     try:
+                        sentinel_log_resend = _challenge_token(
+                            s_log, "authorize_continue", proxies, ctx=log_ctx
+                        )
+                        log_resend_headers = _oai_headers(
+                            s_log.cookies.get("oai-did") or "",
+                            {"Referer": current_url, "content-type": "application/json"},
+                        )
+                        if sentinel_log_resend:
+                            log_resend_headers["openai-sentinel-token"] = sentinel_log_resend
                         _post_with_retry(
                             s_log,
-                            "https://auth.openai.com/api/accounts/email-otp/resend",
-                            headers=_oai_headers(
-                                s_log.cookies.get("oai-did") or "",
-                                {"Referer": current_url, "content-type": "application/json"},
-                            ),
-                            data=_compact_json({}), proxies=proxies, timeout=15,
+                            send_otp_url,
+                            headers=log_resend_headers,
+                            json_body={},
+                            proxies=proxies,
+                            timeout=15,
                         )
                         time.sleep(2)
                     except Exception as e:
@@ -991,7 +1032,7 @@ def _retry_oauth_login_flow(
                     message="二次邮箱验证码一直没收到，暂时无法拿到 token。",
                 )
 
-            sentinel_otp2 = _challenge_token(s_log, "authorize_continue", proxies)
+            sentinel_otp2 = _challenge_token(s_log, "authorize_continue", proxies, ctx=log_ctx)
             val2_headers = _oai_headers(
                 s_log.cookies.get("oai-did") or "",
                 {
@@ -1252,8 +1293,12 @@ def run(proxy: Optional[str]) -> tuple:
         if not did:
             print(f"[{cfg.ts()}] [WARNING] 未获取到 oai-did，节点环境可能被关注。")
 
+        reg_ctx = {}
+
         print(f"[{cfg.ts()}] [INFO] 正在计算风控算力挑战...")
-        sentinel_signup = _challenge_token(s_reg, "authorize_continue", proxies)
+        sentinel_signup = _challenge_token(s_reg, "authorize_continue", proxies, ctx=reg_ctx)
+        if sentinel_signup:
+            print(f"[{cfg.ts()}] [SUCCESS] 算力挑战成功。")
         signup_headers = _oai_headers(
             did,
             {
@@ -1279,7 +1324,9 @@ def run(proxy: Optional[str]) -> tuple:
             _log_registration_http_failure("注册环节", signup_resp)
             return None, None
 
-        sentinel_reg = _challenge_token(s_reg, "username_password_create", proxies, use=True)
+        sentinel_reg = _challenge_token(
+            s_reg, "username_password_create", proxies, use=True, ctx=reg_ctx
+        )
         pwd_headers = _oai_headers(
             did,
             {
@@ -1322,37 +1369,73 @@ def run(proxy: Optional[str]) -> tuple:
                         return None, None
                 except Exception as e:
                     print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
-            otp_url = reg_json.get("continue_url", "")
+            otp_url = str(reg_json.get("continue_url") or "").strip()
+            send_otp_url = "https://auth.openai.com/api/accounts/email-otp/send"
             if otp_url:
-                otp_headers = _oai_headers(
+                try:
+                    otp_headers = _oai_headers(
+                        did,
+                        {
+                            "Referer": "https://auth.openai.com/create-account/password",
+                            "content-type": "application/json",
+                        },
+                    )
+                    if sentinel_reg:
+                        otp_headers["openai-sentinel-token"] = sentinel_reg
+                    _post_with_retry(
+                        s_reg,
+                        otp_url if otp_url.startswith("http") else f"https://auth.openai.com{otp_url}",
+                        headers=otp_headers,
+                        json_body={},
+                        proxies=proxies,
+                        timeout=30,
+                    )
+                except Exception as e:
+                    print(f"[{cfg.ts()}] [WARNING] continue_url 触发 OTP 请求异常: {e}")
+
+            print(f"\n[{cfg.ts()}] [INFO] 正在向 {mask_email(email)} 主动请求发送验证码...")
+            try:
+                sentinel_send = _challenge_token(s_reg, "authorize_continue", proxies, ctx=reg_ctx)
+                send_headers = _oai_headers(
                     did,
                     {
                         "Referer": "https://auth.openai.com/create-account/password",
                         "content-type": "application/json",
                     },
                 )
-                if sentinel_reg:
-                    otp_headers["openai-sentinel-token"] = sentinel_reg
+                if sentinel_send:
+                    send_headers["openai-sentinel-token"] = sentinel_send
                 _post_with_retry(
                     s_reg,
-                    otp_url if otp_url.startswith("http") else f"https://auth.openai.com{otp_url}",
-                    headers=otp_headers,
+                    send_otp_url,
+                    headers=send_headers,
                     json_body={},
                     proxies=proxies,
                     timeout=30,
                 )
-            print(f"\n[{cfg.ts()}] [INFO] 正在向 {mask_email(email)} 发送验证码...")
+            except Exception as e:
+                print(f"[{cfg.ts()}] [WARNING] OTP 初始发送请求异常: {e}")
+
             code = ""
             for resend_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
                 if resend_attempt > 0:
                     print(f"\n[{cfg.ts()}] [INFO] 正在重试 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
                     try:
-                        resend_headers = _oai_headers(did, {"content-type": "application/json"})
-                        if sentinel_reg:
-                            resend_headers["openai-sentinel-token"] = sentinel_reg
+                        sentinel_resend = _challenge_token(
+                            s_reg, "authorize_continue", proxies, ctx=reg_ctx
+                        )
+                        resend_headers = _oai_headers(
+                            did,
+                            {
+                                "Referer": "https://auth.openai.com/create-account/password",
+                                "content-type": "application/json",
+                            },
+                        )
+                        if sentinel_resend:
+                            resend_headers["openai-sentinel-token"] = sentinel_resend
                         _post_with_retry(
                             s_reg,
-                            "https://auth.openai.com/api/accounts/email-otp/resend",
+                            send_otp_url,
                             headers=resend_headers,
                             json_body={},
                             proxies=proxies,
@@ -1370,7 +1453,7 @@ def run(proxy: Optional[str]) -> tuple:
                 print(f"[{cfg.ts()}] [ERROR] 重试次数上限，丢弃当前 {mask_email(email)} 邮箱。")
                 return None, None
 
-            sentinel_otp = _challenge_token(s_reg, "authorize_continue", proxies)
+            sentinel_otp = _challenge_token(s_reg, "authorize_continue", proxies, ctx=reg_ctx)
             val_headers = _oai_headers(
                 did,
                 {
@@ -1450,7 +1533,7 @@ def run(proxy: Optional[str]) -> tuple:
         print(f"[{cfg.ts()}] [INFO] 初始化账户信息 "
               f"(昵称: {user_info['name']}, 生日: {user_info['birthdate']})...")
 
-        sentinel_create = _challenge_token(s_reg, "create_account", proxies, use=True)
+        sentinel_create = _challenge_token(s_reg, "create_account", proxies, use=True, ctx=reg_ctx)
         create_headers = _oai_headers(
             did,
             {

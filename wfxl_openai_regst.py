@@ -15,6 +15,7 @@ import subprocess
 import httpx
 import traceback
 import warnings
+import asyncio
 import re
 from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header, Query, Request
@@ -30,7 +31,8 @@ from utils import register as register_service
 from utils.config import reload_all_configs
 from utils import db_manager
 from utils.sub2api_client import Sub2APIClient
-
+from utils.tg_notifier import send_tg_msg_async
+from utils.gmail_oauth_handler import GmailOAuthHandler
 
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="trio")
 @asynccontextmanager
@@ -52,7 +54,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Wenfxl Codex Manager", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 GITHUB_REPO = "wenfxl/openai-cpa"
-CURRENT_VERSION = "v8.7.4"
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,6 +63,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "config.yaml")
+GMAIL_CLIENT_SECRETS = os.path.join(os.path.dirname(CONFIG_PATH), "credentials.json")
+GMAIL_TOKEN_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "token.json")
+GMAIL_VERIFIER_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "temp_verifier.txt")
+GMAIL_TOKEN_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "token.json")
+
 engine = core_engine.RegEngine()
 db_manager.init_db()
 log_history = deque(maxlen=500)
@@ -111,6 +117,9 @@ class LuckMailBulkBuyReq(BaseModel):
 
 class SMSPriceReq(BaseModel):
     service: str = "openai"
+
+class GmailExchangeReq(BaseModel):
+    code: str
 
 def get_web_password():
     try:
@@ -255,6 +264,29 @@ async def get_stats(token: str = Depends(verify_token)):
 async def stop_task(token: str = Depends(verify_token)):
     if not engine.is_running():
         return {"status": "warning", "message": "当前没有运行的任务"}
+
+    stats = core_engine.run_stats
+    elapsed_time = round(time.time() - stats["start_time"], 1) if stats["start_time"] > 0 else 0
+    total_attempts = stats["success"] + stats["failed"]
+    success_rate = round((stats["success"] / total_attempts * 100), 2) if total_attempts > 0 else 0.0
+    avg_time = round(elapsed_time / stats["success"], 1) if stats["success"] > 0 else 0.0
+    target_str = stats["target"] if stats["target"] > 0 else "∞"
+
+    template_str = getattr(core_engine.cfg, 'TG_BOT', {}).get("template_stop", "🛑 停止：成功 {success}/{target}")
+    try:
+        msg = template_str.format(
+            success_rate=success_rate,
+            success=stats['success'],
+            target=target_str,
+            failed=stats['failed'],
+            retries=stats['retries'],
+            elapsed_time=elapsed_time,
+            avg_time=avg_time
+        )
+    except Exception as e:
+        msg = f"⚠️ TG 模板渲染出错：未知的变量格式。\n请检查配置面板中的模板变量是否正确填写。"
+
+    asyncio.create_task(send_tg_msg_async(msg))
     engine.stop()
     return {"status": "success", "message": "已发送停止指令，正在安全退出..."}
 
@@ -264,12 +296,16 @@ async def get_config(token: str = Depends(verify_token)):
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f) or {}
+    if isinstance(config_data.get("sub2api_mode"), dict):
+        config_data["sub2api_mode"].pop("min_remaining_weekly_percent", None)
     config_data["web_password"] = config_data.get("web_password", "admin")
     return config_data
 
 @app.post("/api/config")
 async def save_config(new_config: dict, token: str = Depends(verify_token)):
     try:
+        if isinstance(new_config.get("sub2api_mode"), dict):
+            new_config["sub2api_mode"].pop("min_remaining_weekly_percent", None)
         with core_engine.cfg.CONFIG_FILE_LOCK:
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 yaml.dump(new_config, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
@@ -280,12 +316,6 @@ async def save_config(new_config: dict, token: str = Depends(verify_token)):
         return {"status": "success", "message": "✅ 配置已成功保存！"}
     except Exception as e:
         return {"status": "error", "message": f"❌ 保存失败: {str(e)}"}
-
-
-import httpx
-import asyncio
-from fastapi import Depends
-
 
 @app.post("/api/config/add_wildcard_dns")
 async def add_wildcard_dns(req: CFSyncExistingReq, token: str = Depends(verify_token)):
@@ -577,39 +607,54 @@ async def manual_review_account_action(data: dict, token: str = Depends(verify_t
 
 @app.post("/api/account/action")
 def account_action(data: dict, token: str = Depends(verify_token)):
-    email = data.get("email")
-    action = data.get("action")
-    config = getattr(core_engine.cfg, '_c', {})
-    
-    token_data = db_manager.get_token_by_email(email)
-    if not token_data:
-        return {"status": "error", "message": f"未找到 {email} 的 Token。"}
+    try:
+        email = data.get("email")
+        action = data.get("action")
+        config = getattr(core_engine.cfg, '_c', {})
 
-    if action == "push":
-        if not config.get("cpa_mode", {}).get("enable", False):
-            return {"status": "error", "message": "🚫 推送失败：未开启 CPA 模式！"}
-        
-        success, msg = core_engine.upload_to_cpa_integrated(
-            token_data, 
-            config.get("cpa_mode", {}).get("api_url", ""), 
-            config.get("cpa_mode", {}).get("api_token", "")
-        )
-        if success:
-            return {"status": "success", "message": f"账号 {email} 已成功推送到 CPA！"}
-        return {"status": "error", "message": f"CPA 推送失败: {msg}"}
+        token_data = db_manager.get_token_by_email(email)
+        if not token_data:
+            print(f"[{core_engine.ts()}] [系统] 未找到 {email} 的 Token。")
+            return {"status": "error", "message": f"未找到 {email} 的 Token。"}
 
-    elif action == "push_sub2api":
-        if not getattr(core_engine.cfg, 'ENABLE_SUB2API_MODE', False):
-            return {"status": "error", "message": "🚫 推送失败：未开启 Sub2API 模式！"}
-            
-        client = Sub2APIClient(api_url=core_engine.cfg.SUB2API_URL, 
-                               api_key=core_engine.cfg.SUB2API_KEY)
-        
-        success, resp = client.add_account(token_data)
-        if success:
-            return {"status": "success", "message": f"账号 {email} 已同步至 Sub2API！"}
-        return {"status": "error", "message": f"Sub2API 推送失败: {resp}"}
-            
+        if action == "push":
+            if not config.get("cpa_mode", {}).get("enable", False):
+                print(f"[{core_engine.ts()}] [系统] 🚫 推送失败：未开启 CPA 模式！")
+                return {"status": "error", "message": "🚫 推送失败：未开启 CPA 模式！"}
+
+            success, msg = core_engine.upload_to_cpa_integrated(
+                token_data,
+                config.get("cpa_mode", {}).get("api_url", ""),
+                config.get("cpa_mode", {}).get("api_token", "")
+            )
+            if success:
+                print(f"[{core_engine.ts()}] [系统] 账号 {email} 已成功推送到 CPA！")
+                return {"status": "success", "message": f"账号 {email} 已成功推送到 CPA！"}
+            print(f"[{core_engine.ts()}] [系统] CPA 推送失败")
+            return {"status": "error", "message": f"CPA 推送失败: {msg}"}
+
+        elif action == "push_sub2api":
+            if not getattr(core_engine.cfg, 'ENABLE_SUB2API_MODE', False):
+                print(f"[{core_engine.ts()}] [系统] 🚫 推送失败：未开启 Sub2API 模式！")
+                return {"status": "error", "message": "🚫 推送失败：未开启 Sub2API 模式！"}
+
+            sub2api_url = getattr(core_engine.cfg, 'SUB2API_URL', '')
+            sub2api_key = getattr(core_engine.cfg, 'SUB2API_KEY', '')
+
+            if not sub2api_url or not sub2api_key:
+                print(f"[{core_engine.ts()}] [系统] 推送失败：未在配置中找到 Sub2API URL 或 Key！")
+                return {"status": "error", "message": "推送失败：未在配置中找到 Sub2API URL 或 Key！"}
+            client = Sub2APIClient(api_url=sub2api_url, api_key=sub2api_key)
+            success, resp = client.add_account(token_data)
+            if success:
+                print(f"[{core_engine.ts()}] [系统] 账号 {email} 已同步至 Sub2API！")
+                return {"status": "success", "message": f"账号 {email} 已同步至 Sub2API！"}
+            print(f"[{core_engine.ts()}] [系统] Sub2API 推送失败")
+            return {"status": "error", "message": f"Sub2API 推送失败: {resp}"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": f"后端推送异常: {str(e)}"}
 # @app.post("/api/config/query_cf_domains")
 # def query_cf_domains_api(req: CFQueryReq, token: str = Depends(verify_token)):
 #     try:
@@ -757,7 +802,7 @@ def _parse_version(v: str):
     return [int(x) for x in re.findall(r'\d+', str(v))]
 
 @app.get("/api/system/check_update")
-async def check_update(token: str = Depends(verify_token)):
+async def check_update(current_version: str, token: str = Depends(verify_token)):
     try:
         url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
         headers = {"Accept": "application/vnd.github.v3+json"}
@@ -777,9 +822,9 @@ async def check_update(token: str = Depends(verify_token)):
         remote_version = data.get("tag_name", "")
 
         try:
-            has_update = _parse_version(remote_version) > _parse_version(CURRENT_VERSION)
+            has_update = _parse_version(remote_version) > _parse_version(current_version)
         except Exception:
-            has_update = str(remote_version) > str(CURRENT_VERSION)
+            has_update = str(remote_version) > str(current_version)
 
         download_url = ""
         assets = data.get("assets")
@@ -803,6 +848,32 @@ async def check_update(token: str = Depends(verify_token)):
         return {"status": "error", "message": f"检查更新发生未知异常: [{error_type}] {str(e)}"}
 
 
+async def send_tg_message(text: str):
+    try:
+        tg_cfg = getattr(core_engine.cfg, '_c', {}).get("tg_bot", {})
+        if not tg_cfg.get("enable") or not tg_cfg.get("token") or not tg_cfg.get("chat_id"):
+            return
+
+        token = tg_cfg["token"].strip()
+        chat_id = str(tg_cfg["chat_id"]).strip()
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+
+        proxy_url = getattr(core_engine.cfg, 'DEFAULT_PROXY', None)
+        client_kwargs = {"timeout": 10.0}
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML"
+        }
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            await client.post(url, json=payload)
+    except Exception as e:
+        print(f"[{core_engine.ts()}] [警告] TG 通知发送失败: {e}")
+
 @app.post("/api/start_check")
 async def start_check_api(token: str = Depends(verify_token)):
     if engine.is_running():
@@ -811,6 +882,79 @@ async def start_check_api(token: str = Depends(verify_token)):
     args = DummyArgs(proxy=default_proxy if default_proxy else None)
     engine.start_check(args)
     return {"code": 200, "message": "独立测活指令已下发！"}
+
+@app.get("/api/gmail/auth_url")
+async def get_gmail_auth_url(token: str = Depends(verify_token)):
+    if not os.path.exists(GMAIL_CLIENT_SECRETS):
+        return {
+            "status": "error",
+            "message": f"❌ 未找到凭证文件！请先将 credentials.json 上传至: {GMAIL_CLIENT_SECRETS}"
+        }
+    try:
+        url, verifier = GmailOAuthHandler.get_authorization_url(GMAIL_CLIENT_SECRETS)
+        with open(GMAIL_VERIFIER_PATH, "w") as f:
+            f.write(verifier)
+        return {"status": "success", "url": url}
+    except Exception as e:
+        return {"status": "error", "message": f"生成链接失败: {str(e)}"}
+
+
+@app.post("/api/gmail/exchange_code")
+async def exchange_gmail_code(req: GmailExchangeReq, token: str = Depends(verify_token)):
+    if not req.code:
+        return {"status": "error", "message": "授权码不能为空"}
+
+    try:
+        if not os.path.exists(GMAIL_VERIFIER_PATH):
+            return {"status": "error", "message": "会话已过期，请重新生成链接"}
+
+        with open(GMAIL_VERIFIER_PATH, "r") as f:
+            stored_verifier = f.read().strip()
+
+        proxy_url = getattr(core_engine.cfg, 'DEFAULT_PROXY', None)
+
+        success, msg = GmailOAuthHandler.save_token_from_code(
+            GMAIL_CLIENT_SECRETS,
+            req.code,
+            GMAIL_TOKEN_PATH,
+            code_verifier=stored_verifier,
+            proxy=proxy_url
+        )
+
+        if success and os.path.exists(GMAIL_VERIFIER_PATH):
+            os.remove(GMAIL_VERIFIER_PATH)
+            return {"status": "success", "message": "✨ 授权成功！token.json 已保存在 data 目录。"}
+        else:
+            return {"status": "error", "message": msg}
+    except Exception as e:
+        return {"status": "error", "message": f"后端换取 Token 异常: {str(e)}"}
+
+@app.get("/api/sub2api/groups")
+async def get_sub2api_groups(token: str = Depends(verify_token)):
+    from curl_cffi import requests as cffi_requests
+
+    sub2api_url = getattr(core_engine.cfg, "SUB2API_URL", "").strip()
+    sub2api_key = getattr(core_engine.cfg, "SUB2API_KEY", "").strip()
+    if not sub2api_url or not sub2api_key:
+        return {"status": "error", "message": "Please save the Sub2API URL and API key first."}
+
+    try:
+        response = cffi_requests.get(
+            f"{sub2api_url.rstrip('/')}/api/v1/admin/groups/all",
+            headers={"x-api-key": sub2api_key, "Content-Type": "application/json"},
+            timeout=10,
+            impersonate="chrome110",
+        )
+        if response.status_code != 200:
+            return {"status": "error", "message": f"HTTP {response.status_code}: {response.text[:200]}"}
+
+        payload = response.json()
+        groups = payload.get("data", [])
+        if not isinstance(groups, list):
+            groups = []
+        return {"status": "success", "data": groups}
+    except Exception as exc:
+        return {"status": "error", "message": f"Failed to fetch Sub2API groups: {exc}"}
 
 if __name__ == "__main__":
     try: reload_all_configs()
