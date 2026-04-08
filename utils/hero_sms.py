@@ -174,6 +174,33 @@ def _hero_sms_reuse_get(service: str, country: int) -> tuple[str, str, int]:
             return "", "", 0
         return aid, phone, uses
 
+
+def _hero_sms_reuse_peek(service: str) -> tuple[str, str, int, int]:
+    now = time.time()
+    ttl = _hero_sms_reuse_ttl_sec()
+    max_uses = _hero_sms_reuse_max_uses()
+    svc = str(service or "").strip()
+    with _HERO_SMS_REUSE_LOCK:
+        aid = str(_HERO_SMS_REUSE_STATE.get("activation_id") or "").strip()
+        phone = str(_HERO_SMS_REUSE_STATE.get("phone") or "").strip()
+        state_svc = str(_HERO_SMS_REUSE_STATE.get("service") or "").strip()
+        try:
+            state_country = int(_HERO_SMS_REUSE_STATE.get("country") or -1)
+        except Exception:
+            state_country = -1
+        uses = int(_HERO_SMS_REUSE_STATE.get("uses") or 0)
+        updated = float(_HERO_SMS_REUSE_STATE.get("updated_at") or 0.0)
+
+        valid = bool(aid and phone)
+        valid = valid and (state_svc == svc)
+        valid = valid and (uses < max_uses)
+        valid = valid and (state_country >= 0)
+        valid = valid and (updated > 0 and (now - updated) <= ttl)
+        if not valid:
+            return "", "", -1, 0
+        return aid, phone, state_country, uses
+
+
 def _hero_sms_reuse_set(activation_id: str, phone: str, service: str, country: int) -> None:
     aid = str(activation_id or "").strip()
     ph = str(phone or "").strip()
@@ -809,6 +836,30 @@ def _hero_sms_set_status(activation_id: str, status: int, proxies: Any) -> str:
     )
     return str(text or "")
 
+
+def _hero_sms_cancel_activation(
+        activation_id: str,
+        proxies: Any,
+        *,
+        source: str = "HeroSMS",
+        reason: str = "",
+) -> str:
+    if not activation_id:
+        return ""
+    resp = str(_hero_sms_set_status(activation_id, 8, proxies) or "").strip()
+    reason_text = str(reason or "").strip() or "未提供原因"
+    if resp:
+        _info(
+            f"{source} 已执行 cancel activation 申请退款: "
+            f"id={activation_id}, reason={reason_text}, resp={resp}"
+        )
+    else:
+        _warn(
+            f"{source} 已执行 cancel activation 申请退款，但平台未返回明确结果: "
+            f"id={activation_id}, reason={reason_text}"
+        )
+    return resp
+
 def _hero_sms_mark_ready(activation_id: str, proxies: Any) -> None:
     if not activation_id or not _hero_sms_mark_ready_enabled():
         return
@@ -1036,7 +1087,7 @@ def _try_verify_phone_via_hero_sms(
             phone_number: str,
             *,
             source: str,
-            close_on_success: bool,
+            keep_for_reuse: bool,
             cancel_on_fail: bool,
     ) -> tuple[bool, str, str]:
         finished = False
@@ -1113,12 +1164,12 @@ def _try_verify_phone_via_hero_sms(
                 _warn(f"{source} {fail_reason} | {str(verify_resp.text or '')[:240]}")
                 return False, "", fail_reason
 
-            if close_on_success:
-                _hero_sms_set_status(activation_id, 6, proxies)
+            if keep_for_reuse:
+                _info(f"{source} 本轮校验成功，activation 保持可复用状态")
             else:
-                keep_resp = _hero_sms_set_status(activation_id, 3, proxies)
-                if keep_resp:
-                    _info(f"{source} 复用保持激活: {keep_resp}")
+                close_resp = _hero_sms_set_status(activation_id, 6, proxies)
+                if close_resp:
+                    _info(f"{source} 已完成 activation: {close_resp}")
             finished = True
 
             try:
@@ -1152,7 +1203,12 @@ def _try_verify_phone_via_hero_sms(
             return False, "", fail_reason
         finally:
             if (not finished) and cancel_on_fail:
-                _hero_sms_set_status(activation_id, 8, proxies)
+                _hero_sms_cancel_activation(
+                    activation_id,
+                    proxies,
+                    source=source,
+                    reason=fail_reason or "验证流程未完成",
+                )
 
     try:
         verify_balance_start, _ = hero_sms_get_balance(proxies)
@@ -1166,29 +1222,41 @@ def _try_verify_phone_via_hero_sms(
             f"超时阈值：{_hero_sms_country_timeout_limit()}次, "
             f"冷却：{_hero_sms_country_cooldown_sec()}s"
         )
+        reuse_on = _hero_sms_reuse_enabled()
         country_id = _hero_sms_pick_country_id(
             proxies,
             service_code=service_code,
             preferred_country=preferred_country_id,
         )
+        if reuse_on:
+            pending_reuse_id, pending_reuse_phone, pending_reuse_country, _ = _hero_sms_reuse_peek(
+                service_code
+            )
+            if pending_reuse_id and pending_reuse_phone and pending_reuse_country >= 0:
+                if country_id != pending_reuse_country:
+                    _warn(
+                        "HeroSMS 检测到待复用号码，优先沿用其所属国家: "
+                        f"{country_id} -> {pending_reuse_country}"
+                    )
+                country_id = pending_reuse_country
         if country_id != preferred_country_id:
             _warn(
                 f"HeroSMS 国家自动切换: {preferred_country_id} -> {country_id}"
             )
-        reuse_on = _hero_sms_reuse_enabled()
 
         if reuse_on:
             reuse_id, reuse_phone, reuse_used = _hero_sms_reuse_get(service_code, country_id)
             if reuse_id and reuse_phone:
+                reuse_attempt = int(reuse_used or 0) + 1
                 _info(
                     "HeroSMS 尝试复用手机号: "
-                    f"号码：{reuse_phone}, used={reuse_used}"
+                    f"号码：{reuse_phone}, used={reuse_used}, 当前第{reuse_attempt}次尝试"
                 )
                 ok_reuse, next_reuse, reason_reuse = _verify_once(
                     reuse_id,
                     reuse_phone,
                     source="复用号码",
-                    close_on_success=False,
+                    keep_for_reuse=True,
                     cancel_on_fail=False,
                 )
                 if ok_reuse:
@@ -1198,11 +1266,18 @@ def _try_verify_phone_via_hero_sms(
                     return True, next_reuse
                 last_reason = reason_reuse or "复用手机号失败"
                 _hero_sms_country_record_result(country_id, False, last_reason)
+                reuse_cancelled = False
                 if _is_hero_sms_timeout_issue(last_reason):
                     switched = _hero_sms_country_mark_timeout(country_id)
+                    _hero_sms_cancel_activation(
+                        reuse_id,
+                        proxies,
+                        source="复用号码",
+                        reason=f"第{reuse_attempt}次接码仍未收到验证码: {last_reason}",
+                    )
+                    _hero_sms_reuse_clear()
+                    reuse_cancelled = True
                     if switched:
-                        _hero_sms_set_status(reuse_id, 8, proxies)
-                        _hero_sms_reuse_clear()
                         next_country = _hero_sms_pick_country_id(
                             proxies,
                             service_code=service_code,
@@ -1213,20 +1288,32 @@ def _try_verify_phone_via_hero_sms(
                                 "当前国家接码超时达到阈值，自动切换国家: "
                                 f"{country_id} -> {next_country}"
                             )
+                            _warn(
+                                f"复用手机号第{reuse_attempt}次接码仍未收到短信，"
+                                f"已取消 activation 申请退款，准备切换国家重新购号: {last_reason}"
+                            )
                             country_id = next_country
                         else:
-                            _hero_sms_reuse_touch(increase=True)
-                            _hero_sms_set_status(reuse_id, 3, proxies)
-                            _warn(f"复用手机号未收到短信，保留号码待下次继续: {last_reason}")
-                            return False, "接码超时，已保留复用号码"
+                            _warn(
+                                f"复用手机号第{reuse_attempt}次接码仍未收到短信，"
+                                f"已取消 activation 申请退款: {last_reason}"
+                            )
+                            return False, "接码超时，复用号码已取消退款"
                     else:
-                        _hero_sms_reuse_touch(increase=True)
-                        _hero_sms_set_status(reuse_id, 3, proxies)
-                        _warn(f"复用手机号未收到短信，保留号码待下次继续: {last_reason}")
-                        return False, "接码超时，已保留复用号码"
-                _warn(f"复用手机号失败，改为新购号码: {last_reason}")
-                _hero_sms_set_status(reuse_id, 8, proxies)
-                _hero_sms_reuse_clear()
+                        _warn(
+                            f"复用手机号第{reuse_attempt}次接码仍未收到短信，"
+                            f"已取消 activation 申请退款: {last_reason}"
+                        )
+                        return False, "接码超时，复用号码已取消退款"
+                if not reuse_cancelled:
+                    _warn(f"复用手机号失败，已取消 activation 并改为新购号码: {last_reason}")
+                    _hero_sms_cancel_activation(
+                        reuse_id,
+                        proxies,
+                        source="复用号码",
+                        reason=last_reason,
+                    )
+                    _hero_sms_reuse_clear()
 
         for attempt in range(1, max_tries + 1):
             _raise_if_stopped()
@@ -1254,7 +1341,7 @@ def _try_verify_phone_via_hero_sms(
                 activation_id,
                 phone_number,
                 source=f"新购号码#{attempt}",
-                close_on_success=(not reuse_on),
+                keep_for_reuse=reuse_on,
                 cancel_on_fail=(not reuse_on),
             )
             if ok_new:
@@ -1267,29 +1354,18 @@ def _try_verify_phone_via_hero_sms(
             last_reason = reason_new or "手机验证失败"
             _hero_sms_country_record_result(country_id, False, last_reason)
             if reuse_on and _is_hero_sms_timeout_issue(last_reason):
-                switched = _hero_sms_country_mark_timeout(country_id)
-                if switched:
-                    _hero_sms_set_status(activation_id, 8, proxies)
-                    _hero_sms_reuse_clear()
-                    next_country = _hero_sms_pick_country_id(
-                        proxies,
-                        service_code=service_code,
-                        preferred_country=preferred_country_id,
-                    )
-                    if next_country != country_id:
-                        _warn(
-                            "当前国家接码超时达到阈值，自动切换国家: "
-                            f"{country_id} -> {next_country}"
-                        )
-                        country_id = next_country
-                        continue
+                _hero_sms_country_mark_timeout(country_id)
                 _hero_sms_reuse_set(activation_id, phone_number, service_code, country_id)
                 _hero_sms_reuse_touch(increase=True)
-                _hero_sms_set_status(activation_id, 3, proxies)
-                _warn("新购号码接码超时，已保留号码供后续复用，停止继续购号")
+                _warn("新购号码在本轮已请求重发短信但仍未收到验证码，已保留号码供后续复用")
                 return False, "接码超时，已保留复用号码"
             if reuse_on:
-                _hero_sms_set_status(activation_id, 8, proxies)
+                _hero_sms_cancel_activation(
+                    activation_id,
+                    proxies,
+                    source=f"新购号码#{attempt}",
+                    reason=last_reason,
+                )
 
         return False, last_reason
     finally:
