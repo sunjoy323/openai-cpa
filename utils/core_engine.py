@@ -20,10 +20,10 @@ import string
 import yaml
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 from typing import Any, Optional, Tuple
 from curl_cffi import requests, CurlMime
 import queue
+from datetime import datetime, timezone, timedelta
 from utils import mail_service
 from utils import config as cfg
 from utils import db_manager
@@ -531,11 +531,13 @@ def handle_registration_result(result: Any, cpa_upload: bool = False, run_ctx: d
         masked_email = mask_email(account_email)
         safe_pwd = str(password) if password else ""
         masked_password = f"{safe_pwd[:2]}****{safe_pwd[-2:]}" if len(safe_pwd) > 4 else "****"
-        template_str = getattr(cfg, 'TG_BOT', {}).get("template_success", "成功: {email} / {password}")
+        template_str = getattr(cfg, 'TG_BOT', {}).get("template_success", "成功: {email} / {password} 时间: {time}")
+        beijing_tz = timezone(timedelta(hours=8))
+        current_time = datetime.now(beijing_tz).strftime("%Y-%m-%d %H:%M:%S")
         try:
-            success_text = template_str.format(email=account_email, password=password, masked_email=masked_email, masked_password=masked_password)
+            success_text = template_str.format(email=account_email, password=safe_pwd, masked_email=masked_email, masked_password=masked_password, time=current_time)
         except Exception:
-            success_text = f"🎉 注册成功\n账号: {account_email}\n密码: {password}\n(温馨提示: 您的TG单号自定义模板配置有误)"
+            success_text = f"🎉 注册成功\n账号: {account_email}\n密码: {safe_pwd}\n时间: {current_time}\n(温馨提示: 您的TG单号自定义模板配置有误)"
 
         send_tg_msg_sync(success_text)
     return ret_status
@@ -939,7 +941,11 @@ async def cpa_main_loop(args, async_stop_event: asyncio.Event):
     """CPA 智能仓管模式（接入发牌器，防止撞车）。"""
     print("=" * 60)
     print(f"\n[{ts()}] [系统] 目标库存阈值: {cfg.MIN_ACCOUNTS_THRESHOLD} | 单次补发量: {cfg.BATCH_REG_COUNT}")
-    print(f"\n[{ts()}] [系统] Sub2API 限额处理: 仅在真实耗尽后禁用或剔除")
+    print(
+        f"\n[{ts()}] [系统] 周限额剔除规则: 剩余低于 {cfg.MIN_REMAINING_WEEKLY_PERCENT}%"
+        if cfg.MIN_REMAINING_WEEKLY_PERCENT > 0
+        else f"\n[{ts()}] [系统] 周限额剔除规则: 完全耗尽才剔除"
+    )
     print("=" * 60)
 
     loop = asyncio.get_running_loop()

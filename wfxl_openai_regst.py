@@ -548,7 +548,7 @@ def account_action(data: dict, token: str = Depends(verify_token)):
             if not config.get("cpa_mode", {}).get("enable", False):
                 print(f"[{core_engine.ts()}] [系统] 🚫 推送失败：未开启 CPA 模式！")
                 return {"status": "error", "message": "🚫 推送失败：未开启 CPA 模式！"}
-
+            print(f"[{core_engine.ts()}] [系统] 账号 {email} 正在进行推送！")
             success, msg = core_engine.upload_to_cpa_integrated(
                 token_data,
                 config.get("cpa_mode", {}).get("api_url", ""),
@@ -571,6 +571,8 @@ def account_action(data: dict, token: str = Depends(verify_token)):
             if not sub2api_url or not sub2api_key:
                 print(f"[{core_engine.ts()}] [系统] 推送失败：未在配置中找到 Sub2API URL 或 Key！")
                 return {"status": "error", "message": "推送失败：未在配置中找到 Sub2API URL 或 Key！"}
+
+            print(f"[{core_engine.ts()}] [系统] 账号 {email} 正在进行推送！")
             client = Sub2APIClient(api_url=sub2api_url, api_key=sub2api_key)
             success, resp = client.add_account(token_data)
             if success:
@@ -897,6 +899,66 @@ async def restart_system(token: str = Depends(verify_token)):
         return {"status": "success", "message": "指令已下发，系统即将重启..."}
     except Exception as e:
         return {"status": "error", "message": f"重启异常: {str(e)}"}
+
+
+@app.post("/api/accounts/export_sub2api")
+async def export_sub2api_accounts(req: ExportReq, token: str = Depends(verify_token)):
+    from datetime import datetime, timezone
+
+    try:
+        if not req.emails:
+            return {"status": "error", "message": "未收到任何要导出的账号"}
+
+        tokens = db_manager.get_tokens_by_emails(req.emails)
+
+        if not tokens:
+            return {"status": "error", "message": "未能提取到选中账号的有效 Token"}
+
+        cfg_dict = getattr(core_engine.cfg, '_c', {})
+        sub2api_settings = cfg_dict.get("sub2api_mode", {})
+
+        concurrency = int(sub2api_settings.get("account_concurrency", 10))
+        load_factor = int(sub2api_settings.get("account_load_factor", 10))
+        priority = int(sub2api_settings.get("account_priority", 1))
+        rate_multiplier = float(sub2api_settings.get("account_rate_multiplier", 1.0))
+        enable_ws = bool(sub2api_settings.get("enable_ws_mode", True))
+
+        extra = {"load_factor": load_factor}
+        if enable_ws:
+            extra["openai_oauth_responses_websockets_v2_enabled"] = True
+            extra["openai_oauth_responses_websockets_v2_mode"] = "passthrough"
+
+        accounts_list = []
+        for token_data in tokens:
+            try:
+                refresh_token = token_data.get("refresh_token", "")
+                account_payload = {
+                    "name": str(token_data.get("email", "unknown"))[:64],
+                    "platform": "openai",
+                    "type": "oauth",
+                    "credentials": {
+                        "refresh_token": refresh_token
+                    },
+                    "concurrency": concurrency,
+                    "priority": priority,
+                    "rate_multiplier": rate_multiplier,
+                    "extra": extra
+                }
+
+                accounts_list.append(account_payload)
+            except Exception:
+                continue
+        exported_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        export_data = {
+            "exported_at": exported_at,
+            "proxies": [],
+            "accounts": accounts_list
+        }
+        return {"status": "success", "data": export_data}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": f"导出失败: {str(e)}"}
 
 if __name__ == "__main__":
     try: reload_all_configs()

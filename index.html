@@ -231,7 +231,10 @@
                                         <span>{{ showAccountsPlaintext ? '🙈' : '👁️' }}</span> {{ showAccountsPlaintext ? '脱敏' : '明文' }}
                                     </button>
                                     <button @click="exportSelectedAccounts" :disabled="selectedAccounts.length === 0" class="text-xs md:text-sm bg-blue-600 text-white px-3 py-1.5 md:px-5 md:py-2 rounded-lg hover:bg-blue-700 transition shadow-md disabled:opacity-50 font-bold flex items-center gap-1.5 md:gap-2">
-                                        <span>📥</span> 导出
+                                        <span>📥</span> 导出 CPA
+                                    </button>
+                                    <button @click="exportSub2Api" :disabled="selectedAccounts.length === 0" class="text-xs md:text-sm bg-blue-600 text-white px-3 py-1.5 md:px-5 md:py-2 rounded-lg hover:bg-blue-700 transition shadow-md disabled:opacity-50 font-bold flex items-center gap-1.5 md:gap-2">
+                                        <span>📥</span> 导出 Sub2Api
                                     </button>
                                     <button @click="exportAccountsToTxt" :disabled="selectedAccounts.length === 0" class="text-xs md:text-sm bg-teal-600 text-white px-3 py-1.5 md:px-5 md:py-2 rounded-lg hover:bg-teal-700 transition shadow-md disabled:opacity-50 font-bold flex items-center gap-1.5 md:gap-2">
                                         <span>📄</span> 账密
@@ -258,7 +261,7 @@
                                             <th class="px-4 md:px-6 py-3 md:py-4 text-left text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider w-12 md:w-16">#</th>
                                             <th class="px-4 md:px-6 py-3 md:py-4 text-left text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider min-w-[150px]">邮箱账号</th>
                                             <th class="px-4 md:px-6 py-3 md:py-4 text-left text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider min-w-[120px]">登录密码</th>
-                                            <th class="px-4 md:px-6 py-3 md:py-4 text-left text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider min-w-[120px]">入库时间</th>
+                                            <th class="px-4 md:px-6 py-3 md:py-4 text-left text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider min-w-[120px]">入库（北京时间）</th>
                                             <th class="px-4 md:px-6 py-3 md:py-4 text-center text-[10px] md:text-xs font-bold text-gray-500 uppercase tracking-wider min-w-[160px]">操作</th>
                                         </tr>
                                     </thead>
@@ -1106,7 +1109,7 @@
                                     <div class="col-span-1 space-y-4 bg-gray-50 p-4 md:p-5 rounded-xl border border-gray-200">
                                         <div><label class="form-label font-bold text-sm">CPA 接口地址</label><input type="text" v-model="config.cpa_mode.api_url" class="form-input border-green-200 bg-white text-sm"></div>
                                         <div>
-                                            <label class="form-label font-bold mt-3 md:mt-4 text-sm">API Token</label>
+                                            <label class="form-label font-bold mt-3 md:mt-4 text-sm">登陆密码</label>
                                             <div class="relative">
                                                 <input :type="showPwd.cpa ? 'text' : 'password'" v-model="config.cpa_mode.api_token" class="form-input border-green-200 bg-white pr-10 text-sm" style="margin-bottom: 0;">
                                                 <button @click="showPwd.cpa = !showPwd.cpa" class="absolute right-3 top-1/2 -translate-y-1/2 text-lg text-gray-400 hover:text-blue-500 focus:outline-none">
@@ -1291,7 +1294,7 @@
                                             <label class="form-label text-blue-800 text-xs md:text-sm font-bold">🎉 单号产出通知模板</label>
                                             <textarea v-model="config.tg_bot.template_success" class="form-input mb-0 text-xs font-mono h-20 md:h-24 border-blue-200" placeholder="填入单号成功模板"></textarea>
                                             <p class="text-[10px] text-blue-500 mt-1.5 leading-relaxed">
-                                                可用变量: <code>{email}</code> 邮箱, <code>{password}</code> 密码, <code class="text-red-400">{masked_email}</code> 脱敏邮箱, <code class="text-red-400">{masked_password}</code> 脱敏密码。
+                                                可用变量: <code>{time}</code> 时间, <code>{email}</code> 邮箱, <code>{password}</code> 密码, <code class="text-red-400">{masked_email}</code> 脱敏邮箱, <code class="text-red-400">{masked_password}</code> 脱敏密码。
                                             </p>
                                         </div>
                                         <div class="mt-2">

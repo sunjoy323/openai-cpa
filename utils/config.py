@@ -458,7 +458,7 @@ def reload_all_configs():
         "token": str(_tg.get("token", "")),
         "chat_id": str(_tg.get("chat_id", "")),
         "template_success": _tg.get("template_success",
-                                    "🎉 <b>注册成功</b>\n📧 账号: <code>{email}</code>\n🔑 密码: <code>{password}</code>"),
+                                    "🎉 <b>注册成功</b>\n⏰ 时间: <code>{time}</code>\n📧 账号: <code>{email}</code>\n🔑 密码: <code>{password}</code>"),
         "template_stop": _tg.get("template_stop",
                                  "🛑 <b>系统已收到停止指令</b>\n\n📊 <b>最终运行统计</b>：\n成功率: {success_rate}% · 成功: {success}/{target} · 失败: {failed} 次 · 风控拦截: {retries} 次 · 总耗时: {elapsed_time}s · 平均单号: {avg_time}s")
     }

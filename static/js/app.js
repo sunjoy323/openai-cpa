@@ -190,7 +190,7 @@ createApp({
                     this.config.tg_bot = { enable: false, token: '', chat_id: '' };
                 }
                 if (!this.config.tg_bot.template_success) {
-                    this.config.tg_bot.template_success = "🎉 <b>注册成功</b>\n📧 账号: <code>{email}</code>\n🔑 密码: <code>{password}</code>";
+                    this.config.tg_bot.template_success = "🎉 <b>注册成功</b>\n⏰ 时间: <code>{time}</code>\n📧 账号: <code>{email}</code>\n🔑 密码: <code>{password}</code>";
                 }
                 if (!this.config.tg_bot.template_stop) {
                     this.config.tg_bot.template_stop = "🛑 <b>系统已收到停止指令</b>\n\n📊 <b>最终运行统计</b>：\n成功率: {success_rate}% · 成功: {success}/{target} · 失败: {failed} 次 · 风控拦截: {retries} 次 · 密码受阻: {pwd_blocked} 次 · 出现手机: {phone_verify} 次 · 总耗时: {elapsed_time}s · 平均单号: {avg_time}s";
@@ -500,6 +500,7 @@ createApp({
             if (action === 'push' && !this.config.cpa_mode.enable) {
                 this.showToast("🚫 无法推送：请先配置 CPA 参数！", "warning"); return;
             }
+            this.currentTab = 'console';
             try {
                 const res = await this.authFetch('/api/account/action', {
                     method: 'POST', body: JSON.stringify({ email: account.email, action: action })
@@ -516,7 +517,6 @@ createApp({
             if (this.evtSource) {
                 this.evtSource.close();
             }
-            // 每次重新连接时，清除旧的定时器
             if (this.logFlushTimer) {
                 clearInterval(this.logFlushTimer);
             }
@@ -525,29 +525,19 @@ createApp({
             const url = `/api/logs/stream?token=${token}`;
 
             this.evtSource = new EventSource(url);
-
-            // 🚀 核心优化：日志缓冲节流渲染
-            // 每 200 毫秒将缓冲池里的日志一次性推入 Vue，并只滚动一次
             this.logFlushTimer = setInterval(() => {
                 if (this.logBuffer.length > 0) {
                     const container = document.getElementById('terminal-container');
 
-                    // 【关键修复点】：在把新日志塞进页面 *之前*，先判断此时用户是不是在最底部
                     let isScrolledToBottom = true;
                     if (container) {
                         isScrolledToBottom = container.scrollHeight - container.clientHeight <= container.scrollTop + 50;
                     }
-
-                    // 一次性批量推入日志
                     this.logs.push(...this.logBuffer);
-                    this.logBuffer = []; // 清空缓冲池
-
-                    // 控制 DOM 总数量防止卡顿
+                    this.logBuffer = [];
                     if (this.logs.length > 500) {
                         this.logs.splice(0, this.logs.length - 500);
                     }
-
-                    // 批量更新完 DOM 后，根据 *之前的状态* 决定要不要滚到底部
                     this.$nextTick(() => {
                         if (container && (isScrolledToBottom || this.logs.length < 50)) {
                             container.scrollTop = container.scrollHeight;
@@ -1027,11 +1017,51 @@ createApp({
         },
         formatTime(dateStr) {
             if (!dateStr) return '-';
-            const d = new Date(dateStr);
+            let utcStr = dateStr;
+            if (typeof dateStr === 'string' && !dateStr.includes('Z')) {
+                utcStr = dateStr.replace(' ', 'T') + 'Z';
+            }
+            const d = new Date(utcStr);
             if (isNaN(d.getTime())) return dateStr;
-
             const pad = (n) => n.toString().padStart(2, '0');
             return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        },
+        async exportSub2Api() {
+            if (this.selectedAccounts.length === 0) {
+                this.showToast('请先勾选账号', 'warning');
+                return;
+            }
+            try {
+                const emailsToExport = this.selectedAccounts.map(item =>
+                    typeof item === 'object' ? item.email : item
+                );
+
+                const response = await this.authFetch('/api/accounts/export_sub2api', {
+                    method: 'POST',
+                    body: JSON.stringify({ emails: emailsToExport })
+                });
+                const res = await response.json();
+
+                if (res.status === 'success') {
+                    const content = JSON.stringify(res.data, null, 2);
+                    const blob = new Blob([content], { type: 'application/json' });
+                    const url = window.URL.createObjectURL(blob);
+
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.setAttribute('download', `sub2api_export_${Date.now()}.json`);
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+
+                    this.showToast(`成功导出 ${res.data.accounts.length} 个独立 Token 文件的下载！`, 'success');
+                } else {
+                    this.showToast(res.message || '导出失败', 'error');
+                }
+            } catch (error) {
+                console.error('导出异常:', error);
+                this.showToast('导出请求异常', 'error');
+            }
         },
     }
 }).mount('#app');
