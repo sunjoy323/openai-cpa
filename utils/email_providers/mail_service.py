@@ -18,9 +18,9 @@ from urllib.parse import urlparse
 import socks
 from curl_cffi import requests
 from utils import config as cfg
-from utils.ai_service import AIService
-from utils.gmail_service import get_gmail_otp_via_oauth
-from utils.duckmail_service import DuckMailService
+from utils.integrations.ai_service import AIService
+from utils.email_providers.gmail_service import get_gmail_otp_via_oauth
+from utils.email_providers.duckmail_service import DuckMailService
 
 def patch_global_socket():
     """在底层强制劫持所有网络请求走 SOCKS5 (智能支持 HTTP 转 SOCKS5)"""
@@ -197,7 +197,7 @@ def get_email_and_token(proxies: Any = None) -> tuple:
 
     if mode == "luckmail":
         try:
-            from utils.luckmail_service import LuckMailService
+            from utils.email_providers.luckmail_service import LuckMailService
             lm_service = LuckMailService(
                 api_key=cfg.LUCKMAIL_API_KEY,
                 preferred_domain=getattr(cfg, 'LUCKMAIL_PREFERRED_DOMAIN', ""),
@@ -259,7 +259,7 @@ def get_email_and_token(proxies: Any = None) -> tuple:
 
     if mode == "duckmail":
         try:
-            from utils.duckmail_service import DuckMailService
+            from utils.email_providers.duckmail_service import DuckMailService
             duck_use_proxy = getattr(cfg, 'DUCK_USE_PROXY', True)
             duck_proxies = proxies if duck_use_proxy else None
             ds = DuckMailService(proxies=duck_proxies)
@@ -276,7 +276,7 @@ def get_email_and_token(proxies: Any = None) -> tuple:
 
     if mode == "generator_email":
         try:
-            from utils.generator_email_service import GeneratorEmailService
+            from utils.email_providers.generator_email_service import GeneratorEmailService
             ge_service = GeneratorEmailService(proxies=mail_proxies)
             email, token = ge_service.create_email()
 
@@ -292,7 +292,7 @@ def get_email_and_token(proxies: Any = None) -> tuple:
 
     if mode == "tempmail":
         try:
-            from utils.tempmail_service import TempmailService
+            from utils.email_providers.tempmail_service import TempmailService
             tm_service = TempmailService(proxies=mail_proxies)
             email, token = tm_service.create_email()
 
@@ -307,7 +307,7 @@ def get_email_and_token(proxies: Any = None) -> tuple:
         return None, None
     if mode == "tempmail_org":
         try:
-            from utils.tempmail_org import TempMailOrgService
+            from utils.email_providers.tempmail_org import TempMailOrgService
             tm_org = TempMailOrgService(proxies=mail_proxies)
             email, token = tm_org.create_email()
 
@@ -889,7 +889,7 @@ def get_oai_code(
                     print(f"\n[{cfg.ts()}] [ERROR] GeneratorEmail 缺少凭证 (surl)，无法提取验证码！")
                     return ""
                 try:
-                    from utils.generator_email_service import GeneratorEmailService
+                    from utils.email_providers.generator_email_service import GeneratorEmailService
                     ge_service = GeneratorEmailService(proxies=mail_proxies)
 
                     code = ge_service.get_verification_code(jwt)
@@ -905,7 +905,7 @@ def get_oai_code(
                     print(f"\n[{cfg.ts()}] [ERROR] Tempmail 缺少 token，无法提取验证码！")
                     return ""
                 try:
-                    from utils.tempmail_service import TempmailService
+                    from utils.email_providers.tempmail_service import TempmailService
                     tm_service = TempmailService(proxies=mail_proxies)
                     email_list = tm_service.get_inbox(jwt)
 
@@ -939,7 +939,7 @@ def get_oai_code(
                     print(f"\n[{cfg.ts()}] [ERROR] TempMail.org 缺少 token，无法提取验证码！")
                     return ""
                 try:
-                    from utils.tempmail_org import TempMailOrgService
+                    from utils.email_providers.tempmail_org import TempMailOrgService
                     tm_org = TempMailOrgService(proxies=mail_proxies)
                     email_list = tm_org.get_inbox(jwt)
 
@@ -1158,7 +1158,7 @@ def get_oai_code(
                     print(f"\n[{cfg.ts()}] [ERROR] LuckMail 缺少 token，无法提取验证码！")
                     return ""
                 try:
-                    from utils.luckmail_service import LuckMailService
+                    from utils.email_providers.luckmail_service import LuckMailService
                     lm_service = LuckMailService(api_key=cfg.LUCKMAIL_API_KEY)
 
                     code = lm_service.get_code(jwt)

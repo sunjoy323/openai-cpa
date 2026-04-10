@@ -24,9 +24,9 @@ except Exception:
 
 from utils import config as cfg
 from utils import db_manager
-from utils.mail_service import get_email_and_token, get_oai_code, mask_email
+from utils.email_providers.mail_service import get_email_and_token, get_oai_code, mask_email
 try:
-    from utils.hero_sms import _try_verify_phone_via_hero_sms
+    from utils.integrations.hero_sms import _try_verify_phone_via_hero_sms
 except Exception:
     _try_verify_phone_via_hero_sms = None
 
@@ -1362,7 +1362,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
         if need_otp:
             if cfg.EMAIL_API_MODE == "luckmail":
                 try:
-                    from utils.luckmail_service import LuckMailService
+                    from utils.email_providers.luckmail_service import LuckMailService
                     print(f"[{cfg.ts()}] [INFO] 正在检测 LuckMail 邮箱（{mask_email(email)}）是否存活...")
                     lm_service = LuckMailService(
                         api_key=cfg.LUCKMAIL_API_KEY,

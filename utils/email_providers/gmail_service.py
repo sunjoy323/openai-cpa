@@ -1,7 +1,7 @@
 import os
 import re
 import time
-from utils.gmail_oauth_handler import GmailOAuthHandler
+from utils.email_providers.gmail_oauth_handler import GmailOAuthHandler
 from utils import config as cfg
 
 def get_gmail_otp_via_oauth(target_email, proxy=None):

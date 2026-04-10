@@ -270,11 +270,15 @@ class Sub2APIClient:
 
     def set_account_status(self, account_id: str, disabled: bool) -> bool:
         url = f"{self.api_url}/api/v1/admin/accounts/{account_id}"
-        payload = {"disabled": disabled}
+
+        status_val = "inactive" if disabled else "active"
+        payload = {"status": status_val}
+
         try:
             response = cffi_requests.patch(url, json=payload, headers=self.headers, **self.request_kwargs)
             if response.status_code in (200, 201, 204):
                 return True
+
             response = cffi_requests.put(url, json=payload, headers=self.headers, **self.request_kwargs)
             return response.status_code in (200, 201, 204)
         except Exception as exc:

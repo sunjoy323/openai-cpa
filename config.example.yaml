@@ -237,6 +237,8 @@ tg_bot:
   enable: false
   token: ''
   chat_id: ''
+  mask_email: false
+  mask_password: false
 
 # WEB端密码
 web_password: admin
@@ -244,3 +246,8 @@ web_password: admin
 cf_api_email: 
 #CF KEY
 cf_api_key:
+
+#集群总控
+cluster_node_name: "NODE-1"
+cluster_master_url: ""
+cluster_secret: "wenfxl666"

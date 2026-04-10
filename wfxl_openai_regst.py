@@ -31,9 +31,9 @@ from utils import core_engine
 from utils import register as register_service
 from utils.config import reload_all_configs
 from utils import db_manager
-from utils.sub2api_client import Sub2APIClient
-from utils.tg_notifier import send_tg_msg_async
-from utils.gmail_oauth_handler import GmailOAuthHandler
+from utils.integrations.sub2api_client import Sub2APIClient
+from utils.integrations.tg_notifier import send_tg_msg_async
+from utils.email_providers.gmail_oauth_handler import GmailOAuthHandler
 
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="trio")
 @asynccontextmanager
@@ -755,7 +755,7 @@ async def get_dashboard():
 # 余额查询接口示例
 @app.get('/api/sms/balance')
 def api_get_sms_balance(token: str = Depends(verify_token)):
-    from utils.hero_sms import hero_sms_get_balance
+    from utils.integrations.hero_sms import hero_sms_get_balance
     proxy_url = core_engine.cfg.DEFAULT_PROXY
     proxies = {
         "http": proxy_url,
@@ -769,7 +769,7 @@ def api_get_sms_balance(token: str = Depends(verify_token)):
 # 库存价格查询接口
 @app.post('/api/sms/prices')
 def api_get_sms_prices(req: SMSPriceReq, token: str = Depends(verify_token)):
-    from utils.hero_sms import _hero_sms_prices_by_service
+    from utils.integrations.hero_sms import _hero_sms_prices_by_service
     proxy_url = core_engine.cfg.DEFAULT_PROXY
 
     proxies = {
@@ -785,7 +785,7 @@ def api_get_sms_prices(req: SMSPriceReq, token: str = Depends(verify_token)):
 @app.post("/api/luckmail/bulk_buy")
 def api_luckmail_bulk_buy(req: LuckMailBulkBuyReq, token: str = Depends(verify_token)):
     try:
-        from utils.luckmail_service import LuckMailService
+        from utils.email_providers.luckmail_service import LuckMailService
         lm_service = LuckMailService(
             api_key=req.config.get("api_key"),
             preferred_domain=req.config.get("preferred_domain", ""),

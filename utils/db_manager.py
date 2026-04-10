@@ -370,3 +370,19 @@ def get_sys_kv(key: str, default=None):
     except Exception:
         pass
     return default
+
+
+def get_all_accounts_with_token(limit: int = 10000) -> list:
+    """提取包含完整 token_data 的账号列表，供集群导出等场景使用。"""
+    try:
+        with sqlite3.connect(DB_PATH, timeout=10) as conn:
+            c = conn.cursor()
+            c.execute(
+                "SELECT email, password, token_data FROM accounts ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            rows = c.fetchall()
+            return [{"email": r[0], "password": r[1], "token_data": r[2]} for r in rows]
+    except Exception as e:
+        print(f"[{ts()}] [ERROR] 提取完整账号数据失败: {e}")
+        return []
