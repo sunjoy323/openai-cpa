@@ -565,14 +565,29 @@ async def manual_review_account_action(data: dict, token: str = Depends(verify_t
     if not account:
         return {"status": "error", "message": f"未找到 {email} 的人工复核记录。"}
 
+    masked_email = register_service.mask_email(email)
+    print(f"[{core_engine.ts()}] [INFO] {'=' * 24} 人工复核自动补拿 Token 开始 {'=' * 24}")
+    print(f"[{core_engine.ts()}] [INFO] [人工复核] 收到补拿 Token 请求: {masked_email}")
+    print(
+        f"[{core_engine.ts()}] [INFO] [人工复核] 当前记录状态: "
+        f"status={account.get('status', '-')}, stage={account.get('stage', '-')}, "
+        f"url={account.get('current_url', '-') or '-'}"
+    )
+
     try:
         reload_all_configs()
+        print(f"[{core_engine.ts()}] [INFO] [人工复核] 配置重载完成，准备进入自动登录流程。")
     except Exception as e:
         print(f"[{core_engine.ts()}] [WARNING] 人工复核动作前重载配置失败，将继续使用当前配置: {e}")
 
     proxy = getattr(core_engine.cfg, "DEFAULT_PROXY", "") or None
-    print(f"[{core_engine.ts()}] [INFO] 开始处理人工复核账号补拿 Token: {email}")
-    result = register_service.retry_manual_review_login(
+    if proxy:
+        print(f"[{core_engine.ts()}] [INFO] [人工复核] 本次补拿 Token 使用代理: {proxy}")
+    else:
+        print(f"[{core_engine.ts()}] [INFO] [人工复核] 本次补拿 Token 未配置代理，走直连。")
+
+    result = await asyncio.to_thread(
+        register_service.retry_manual_review_login,
         email=email,
         password=account.get("password", ""),
         email_jwt=account.get("email_jwt", ""),
@@ -580,12 +595,23 @@ async def manual_review_account_action(data: dict, token: str = Depends(verify_t
     )
 
     if result.get("success") and result.get("token_json"):
-        if db_manager.save_account_to_db(email, account.get("password", ""), result["token_json"]):
+        print(f"[{core_engine.ts()}] [SUCCESS] [人工复核] 已成功拿到 Token，准备写入本地账号库: {masked_email}")
+        saved = await asyncio.to_thread(
+            db_manager.save_account_to_db,
+            email,
+            account.get("password", ""),
+            result["token_json"],
+        )
+        if saved:
+            print(f"[{core_engine.ts()}] [SUCCESS] [人工复核] 账号已成功转入本地账号库: {masked_email}")
+            print(f"[{core_engine.ts()}] [INFO] {'=' * 24} 人工复核自动补拿 Token 结束 {'=' * 24}")
             return {
                 "status": "success",
                 "message": f"账号 {email} 已成功自动登录并转入本地账号库。",
             }
-        db_manager.update_manual_review_account(
+        print(f"[{core_engine.ts()}] [ERROR] [人工复核] 已拿到 Token，但写入本地账号库失败: {masked_email}")
+        await asyncio.to_thread(
+            db_manager.update_manual_review_account,
             email,
             status="retry_failed",
             stage="save_account_to_db_failed",
@@ -593,6 +619,7 @@ async def manual_review_account_action(data: dict, token: str = Depends(verify_t
             note="自动登录已拿到 token，但写入本地账号库失败。",
             last_result="自动登录成功但本地入库失败，请检查数据库日志。",
         )
+        print(f"[{core_engine.ts()}] [INFO] {'=' * 24} 人工复核自动补拿 Token 结束 {'=' * 24}")
         return {"status": "error", "message": "已拿到 token，但写入本地账号库失败。"}
 
     fail_status = result.get("status") or "retry_failed"
@@ -600,7 +627,13 @@ async def manual_review_account_action(data: dict, token: str = Depends(verify_t
     fail_url = result.get("current_url", "") or account.get("current_url", "")
     fail_note = result.get("note") or account.get("note", "") or "自动登录未拿到 token。"
     fail_message = result.get("message") or fail_note
-    db_manager.update_manual_review_account(
+    print(
+        f"[{core_engine.ts()}] [ERROR] [人工复核] 自动补拿 Token 失败: "
+        f"{masked_email}, status={fail_status}, stage={fail_stage}, "
+        f"url={fail_url or '-'}, reason={fail_message}"
+    )
+    await asyncio.to_thread(
+        db_manager.update_manual_review_account,
         email,
         status=fail_status,
         stage=fail_stage,
@@ -608,6 +641,7 @@ async def manual_review_account_action(data: dict, token: str = Depends(verify_t
         note=fail_note,
         last_result=fail_message,
     )
+    print(f"[{core_engine.ts()}] [INFO] {'=' * 24} 人工复核自动补拿 Token 结束 {'=' * 24}")
     return {"status": "error", "message": fail_message}
 
 @app.post("/api/account/action")

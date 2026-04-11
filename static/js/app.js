@@ -557,6 +557,7 @@ createApp({
             if (!confirmed) return;
 
             this.manualReviewLoadingEmail = account.email;
+            this.switchTab('console');
             try {
                 const res = await this.authFetch('/api/manual-review-accounts/action', {
                     method: 'POST',

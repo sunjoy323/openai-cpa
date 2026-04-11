@@ -1234,7 +1234,9 @@ def retry_manual_review_login(
     proxy: Optional[str] = None,
 ) -> Dict[str, Any]:
     processed_mails: set = set()
+    print(f"[{cfg.ts()}] [INFO] [人工复核] 进入自动补拿 Token 流程: {mask_email(email)}")
     _clear_sentinel_cache()
+    print(f"[{cfg.ts()}] [DEBUG] [人工复核] 已清理 sentinel 缓存，准备初始化登录会话。")
     proxy = cfg.format_docker_url(proxy)
     if proxy and proxy.startswith("socks5://"):
         proxy = proxy.replace("socks5://", "socks5h://")
@@ -1243,7 +1245,7 @@ def retry_manual_review_login(
     print(f"[{cfg.ts()}] [INFO] 开始尝试为人工复核账号补拿 Token: {mask_email(email)}")
     if proxy:
         print(f"[{cfg.ts()}] [INFO] 本次人工复核自动登录使用代理: {proxy}")
-    return _retry_oauth_login_flow(
+    result = _retry_oauth_login_flow(
         email,
         password,
         email_jwt=email_jwt,
@@ -1251,6 +1253,12 @@ def retry_manual_review_login(
         processed_mails=processed_mails,
         record_manual_on_add_phone=False,
     )
+    print(
+        f"[{cfg.ts()}] [INFO] [人工复核] 自动补拿 Token 流程结束: "
+        f"{mask_email(email)}, success={bool(result.get('success'))}, "
+        f"stage={result.get('stage') or '-'}"
+    )
+    return result
 
 
 def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
