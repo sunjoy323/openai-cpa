@@ -72,7 +72,10 @@ class LocalMicrosoftService:
 
     def _exchange_refresh_token(self, mailbox: dict) -> str:
         refresh_token = mailbox.get("refresh_token")
-        client_id = str(mailbox.get("client_id") or getattr(cfg, "LOCAL_MS_CLIENT_ID", "")).strip()
+        BUILTIN_CLIENT_ID = "7feada80-d946-4d06-b134-73afa3524fb7"
+        db_client_id = mailbox.get("client_id")
+        cfg_client_id = getattr(cfg, "LOCAL_MS_CLIENT_ID", "")
+        client_id = str(db_client_id or cfg_client_id or BUILTIN_CLIENT_ID).strip()
 
         if not refresh_token or not client_id:
             raise ValueError(f"[{cfg.ts()}] [ERROR] 缺失凭据，无法执行令牌交换")

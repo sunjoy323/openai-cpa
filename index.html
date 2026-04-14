@@ -848,7 +848,7 @@
                                         </div>
 
                                         <label class="relative inline-flex items-center cursor-pointer group">
-                                            <span class="mr-3 text-xs font-black text-indigo-600 uppercase tracking-widest">开启无限裂变</span>
+                                            <span class="mr-3 text-xs font-black text-indigo-600 uppercase tracking-widest">开启手动无限裂变</span>
                                             <input type="checkbox" v-model="config.local_microsoft.enable_fission" class="sr-only peer">
                                             <div class="relative w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-indigo-600 shadow-inner transition-all"></div>
                                         </label>
@@ -856,7 +856,7 @@
                                     <transition name="fade">
                                         <div v-if="!config.local_microsoft.enable_fission" class="bg-sky-50 border border-sky-200 text-sky-800 p-4 rounded-xl mb-4 font-bold text-sm shadow-sm flex items-center gap-2">
                                             <span class="text-xl">📬</span>
-                                            <div><b>微软邮箱库：</b>系统将从“微软邮箱库”提取账号。<br><span class="text-xs text-sky-600">※ 兼容账号密码格式导入，无Client ID需要在下方填写Client ID，无Refresh Token可点击左侧微软邮箱库“去授权”。</span></div>
+                                            <div><b>微软邮箱库：</b>系统将从“微软邮箱库”提取账号。<br><span class="text-xs text-sky-600">※ 兼容账号密码格式导入，无Refresh Token可点击左侧微软邮箱库“去授权”。</span></div>
                                         </div>
 
                                         <div v-else class="bg-indigo-50 border border-indigo-200 text-indigo-800 p-4 rounded-xl mb-4 font-bold text-sm shadow-sm flex items-center gap-2">
@@ -876,7 +876,7 @@
                                     </div>
                                     <div class="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
                                         <label class="block text-slate-700 text-xs font-extrabold mb-1.5 uppercase tracking-wider">全局 Client ID (graph应用ID 选填)</label>
-                                        <input type="text" v-model="config.local_microsoft.client_id" class="w-full appearance-none bg-slate-50 border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 shadow-inner font-mono text-sm" placeholder="如果导入的账号自带client_id则优先用自带的，否则用此全局兜底">
+                                        <input type="text" v-model="config.local_microsoft.client_id" class="w-full appearance-none bg-slate-50 border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 shadow-inner font-mono text-sm" placeholder="如果导入的账号自带clientid这里则空着，如果你不想填也可以空着">
                                     </div>
 
                                     <div v-if="config.local_microsoft.enable_fission" class="space-y-4 pt-4 border-t-2 border-dashed border-slate-100 animate-fade-in">

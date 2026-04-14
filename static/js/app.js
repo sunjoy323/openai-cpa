@@ -3,7 +3,7 @@ const { createApp } = Vue;
 createApp({
     data() {
         return {
-            appVersion: 'v10.0.4',
+            appVersion: 'v10.0.5',
             isLoggedIn: !!localStorage.getItem('auth_token'),
             loginPassword: '',
             currentTab: window.location.hash.replace('#', '') || 'console',
@@ -125,6 +125,7 @@ createApp({
                 isGenerating: false,
                 isLoading: false
             },
+            BUILTIN_CLIENT_ID: "7feada80-d946-4d06-b134-73afa3524fb7",
         };
     },
     mounted() {
@@ -1796,9 +1797,9 @@ createApp({
             }
         },
         openOutlookAuthModal(mailbox) {
-            const cid = mailbox.client_id || this.config?.local_microsoft?.client_id;
+            const cid = mailbox.client_id || this.config?.local_microsoft?.client_id || this.BUILTIN_CLIENT_ID;
             if (!cid) {
-                this.showToast("🚫 请先在左侧【邮箱配置-微软邮箱库】面板中填写全局的 Client ID！", "warning");
+                this.showToast("🚫 无法获取有效的 Client ID！", "warning");
                 return;
             }
             this.outlookAuth.mailbox = mailbox;
@@ -1813,7 +1814,7 @@ createApp({
             try {
                 const res = await this.authFetch('/api/mailboxes/oauth_url', {
                     method: 'POST',
-                    body: JSON.stringify({ client_id: this.config.local_microsoft.client_id })
+                    body: JSON.stringify({ client_id: this.outlookAuth.currentClientId })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
@@ -1860,10 +1861,6 @@ createApp({
             }
         },
         openFissionAuthModal() {
-            if (!this.config.local_microsoft.client_id) {
-                this.showToast("🚫 请先填写全局 Client ID！", "warning");
-                return;
-            }
             if (!this.config.local_microsoft.master_email) {
                 this.showToast("🚫 请先填写裂变主邮箱账号！", "warning");
                 return;
@@ -1873,7 +1870,7 @@ createApp({
                 email: this.config.local_microsoft.master_email,
                 isFission: true
             };
-            this.outlookAuth.currentClientId = this.config.local_microsoft.client_id;
+            this.outlookAuth.currentClientId = this.config.local_microsoft.client_id || this.BUILTIN_CLIENT_ID;
             this.outlookAuth.authUrl = '';
             this.outlookAuth.pastedUrl = '';
             this.outlookAuth.showModal = true;
