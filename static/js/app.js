@@ -3,17 +3,20 @@ const { createApp } = Vue;
 createApp({
     data() {
         return {
-            appVersion: 'v8.9.1',
+            appVersion: 'v10.1.0',
             isLoggedIn: !!localStorage.getItem('auth_token'),
             loginPassword: '',
-            currentTab: 'console',
+            currentTab: window.location.hash.replace('#', '') || 'console',
 			showAccountsPlaintext: false,
             isRunning: false,
             tabs: [
                 { id: 'console', name: '运行主页', icon: '💻' },
+                { id: 'cluster', name: '集群总控', icon: '🖥️' },
+                { id: 'email', name: '邮箱配置', icon: '📧' },
+                { id: 'mailboxes', name: '微软邮箱库', icon: '📬' },
                 { id: 'accounts', name: '账号库存', icon: '📦' },
                 { id: 'manual_review_accounts', name: '人工复核', icon: '🧑‍⚖️' },
-                { id: 'email', name: '邮箱配置', icon: '📧' },
+                { id: 'cloud', name: '云端库存', icon: '☁️' },
                 { id: 'sms', name: '手机接码', icon: '📱' },
 				// { id: 'cf_routes', name: 'CF 路由', icon: '🌍' },
                 { id: 'proxy', name: '网络代理', icon: '🌐' },
@@ -75,7 +78,17 @@ createApp({
                 login: false, web: false, cf: false, imap: false, 
                 free_token: false, free_pass: false,
                 cm: false, mc: false, clash: false, cpa: false, sub2api: false,
-                cf_key: false, cf_modal_key: false 
+                cf_key: false, cf_modal_key: false,
+                mail_domains: true, cf_email: true, gpt_base: true, imap_user: true,
+                free_url: true, cm_url: true, cm_email: true, mc_base: true,
+                ai_base: true, cluster_url: true, proxy: true, clash_api: true,
+                clash_test: true, tg_token: false, tg_chatid: false, cpa_url: true, sub_url: true,
+                cluster_secret: false, hero_key: false, duck_token: false, duck_cookie: false,
+                luckmail: false,
+                temporam: false,
+                tmailor_token: false,
+                fvia_token: false,
+                master_rt: false
             },
 
             toasts: [],
@@ -89,13 +102,54 @@ createApp({
                 isLoading: false,
                 isGenerating: false
             },
-            isLoadingSub2APIGroups: false
+            isLoadingSub2APIGroups: false,
+            cloudAccounts: [],
+            selectedCloud: [],
+            cloudFilters: ['sub2api', 'cpa'],
+            showCloudPlaintext: false,
+            cloudPage: 1,
+            cloudPageSize: 10,
+            cloudTotal: 0,
+            localCheckTimes: {},
+            localCloudDetails: {},
+            isCloudActionLoading: false,
+            showCloudDetailModal: false,
+            currentCloudDetail: null,
+            nowTimestamp: Math.floor(Date.now() / 1000),
+            clusterNodes: {},
+            mailboxes: [],
+            selectedMailboxes: [],
+            mailboxPage: 1,
+            mailboxPageSize: 10,
+            totalMailboxes: 0,
+            showImportMailboxModal: false,
+            importMailboxText: '',
+            isImportingMailbox: false,
+            outlookAuth: {
+                showModal: false,
+                mailbox: null,
+                currentClientId: '',
+                authUrl: '',
+                pastedUrl: '',
+                isGenerating: false,
+                isLoading: false
+            },
+            BUILTIN_CLIENT_ID: "7feada80-d946-4d06-b134-73afa3524fb7",
         };
     },
     mounted() {
         if (this.isLoggedIn) {
             this.initApp();
         }
+        window.addEventListener('hashchange', () => {
+            const tab = window.location.hash.replace('#', '');
+            if (tab && this.tabs.some(t => t.id === tab)) {
+                this.currentTab = tab;
+            }
+        });
+        this.timer = setInterval(() => {
+            this.nowTimestamp = Math.floor(Date.now() / 1000);
+        }, 1000);
     },
     beforeUnmount() {
         if(this.statsTimer) clearInterval(this.statsTimer);
@@ -103,6 +157,12 @@ createApp({
 	computed: {
         totalPages() {
             return Math.ceil(this.totalAccounts / this.pageSize) || 1;
+        },
+        cloudTotalPages() {
+            return Math.ceil(this.cloudTotal / this.cloudPageSize) || 1;
+        },
+        mailboxTotalPages() {
+            return Math.ceil(this.totalMailboxes / this.mailboxPageSize) || 1;
         },
         manualReviewTotalPages() {
             return Math.ceil(this.manualReviewTotal / this.manualReviewPageSize) || 1;
@@ -170,27 +230,62 @@ createApp({
             }
             if(this.statsTimer) clearInterval(this.statsTimer);
         },
-        initApp() {
-            this.fetchConfig();
+        async initApp() {
+            await this.fetchConfig();
             this.fetchAccounts();
             this.fetchManualReviewAccounts();
             this.initSSE();
             this.startStatsPolling();
             this.checkUpdate();
+            if (this.config && this.config.reg_mode === 'extension') {
+                this.listenToExtension();
+            }
         },
         startStatsPolling() {
-            if(this.statsTimer) clearInterval(this.statsTimer);
+            if(this.statsTimer) clearTimeout(this.statsTimer);
             this.pollStats();
-            this.statsTimer = setInterval(this.pollStats, 1000);
         },
         async pollStats() {
             if(!this.isLoggedIn) return;
             try {
                 const res = await this.authFetch('/api/stats');
                 const data = await res.json();
+
                 this.stats = data;
-                this.isRunning = data.is_running;
-            } catch(e){}
+
+                if (this.config?.reg_mode === 'extension') {
+                    data.target = this.config?.normal_mode?.target_count || 0;
+                    const wasRunning = this.isRunning;
+                    this.isRunning = data.is_running;
+                    if (this.isRunning) {
+                        this.stats.mode = '插件托管运行中...';
+                        if (parseFloat(data.elapsed) <= 0) {
+                            this.stats.elapsed = "0.0s";
+                        }
+                        if (!wasRunning && this.isExtConnected && !this._extDispatchTimer) {
+                            console.log("[总控] 同步到全局运行状态，当前节点自动加入生产线...");
+                            this.dispatchExtensionTask();
+                        }
+                    }
+                this.stats = data;
+                } else {
+                    this.isRunning = data.is_running;
+                }
+
+                if (this.currentTab === 'cluster') {
+                    const cRes = await this.authFetch('/api/cluster/view');
+                    const cData = await cRes.json();
+                    if (cData.status === 'success') {
+                        this.clusterNodes = cData.nodes;
+                    }
+                }
+            } catch(e) {
+
+            } finally {
+                this.statsTimer = setTimeout(() => {
+                    this.pollStats();
+                }, 1000);
+            }
         },
         async fetchConfig() {
             try {
@@ -199,6 +294,26 @@ createApp({
                 if (!this.config.tg_bot) {
                     this.config.tg_bot = { enable: false, token: '', chat_id: '' };
                 }
+                if (!this.config.local_microsoft) {
+                    this.config.local_microsoft = {
+                        enable_fission: false,
+                        master_email: '',
+                        client_id: '',
+                        refresh_token: ''
+                    };
+                }
+                if (!this.config.fvia) {
+                    this.config.fvia = { token: '' };
+                }
+                if (!this.config.tmailor) {
+                    this.config.tmailor = { current_token: '' };
+                }
+                if (!this.config.temporam) {
+                    this.config.temporam = { cookie: '' };
+                }
+                if (!this.config.reg_mode) {
+                        this.config.reg_mode = 'protocol';
+                    }
                 if (!this.config.tg_bot.template_success) {
                     this.config.tg_bot.template_success = "🎉 <b>注册成功</b>\n⏰ 时间: <code>{time}</code>\n📧 账号: <code>{email}</code>\n🔑 密码: <code>{password}</code>";
                 }
@@ -235,6 +350,9 @@ createApp({
                 if(Array.isArray(this.config.warp_proxy_list)) {
                     this.warpListStr = this.config.warp_proxy_list.join('\n');
                 }
+                if (this.config.cluster_node_name === undefined) this.config.cluster_node_name = '';
+                if (this.config.cluster_master_url === undefined) this.config.cluster_master_url = '';
+                if (this.config.cluster_secret === undefined) this.config.cluster_secret = 'wenfxl666';
             } catch (e) {}
         },
         async saveConfig() {
@@ -280,7 +398,9 @@ createApp({
                 this.manualReviewCurrentPage = 1;
             }
             try {
-                const res = await this.authFetch(`/api/manual-review-accounts?page=${this.manualReviewCurrentPage}&page_size=${this.manualReviewPageSize}`);
+                const res = await this.authFetch(
+                    `/api/manual-review-accounts?page=${this.manualReviewCurrentPage}&page_size=${this.manualReviewPageSize}`
+                );
                 const data = await res.json();
                 if (data.status === 'success') {
                     this.manualReviewAccounts = data.data || [];
@@ -318,6 +438,7 @@ createApp({
         },
         switchTab(tabId) {
             this.currentTab = tabId;
+            window.location.hash = tabId;
 			if (tabId === 'console') {
 				this.pollStats(); 
 			}
@@ -329,53 +450,117 @@ createApp({
 			if (tabId === 'email') {
 				this.fetchConfig();
 			}
+			if (tabId === 'cloud') {
+			    this.fetchCloudAccounts();
+			}
+            if (tabId === 'cluster') {
+                this.initClusterWebSocket();
+            } else {
+                if (this.clusterWs) this.clusterWs.close();
+            }
+            if (tabId === 'mailboxes') {
+                this.fetchMailboxes();
+            }
         },
         async exportSelectedAccounts() {
             if (this.selectedAccounts.length === 0) {
                 this.showToast("请先勾选需要导出的账号", "warning");
                 return;
             }
-            
+
             const emails = this.selectedAccounts.map(acc => acc.email);
-            
+
             try {
                 const res = await this.authFetch('/api/accounts/export_selected', {
                     method: 'POST',
                     body: JSON.stringify({ emails: emails })
                 });
                 const result = await res.json();
-                
+
                 if (result.status === 'success') {
-                    result.data.forEach((tokenObj, index) => {
-                        setTimeout(() => {
+                    const data = result.data;
+                    const timestamp = Math.floor(Date.now() / 1000);
+                    if (data.length > 1) {
+                        const zip = new JSZip();
+
+                        data.forEach((tokenObj, index) => {
                             const accEmail = tokenObj.email || "unknown";
                             const parts = accEmail.split('@');
                             const prefix = parts[0] || "user";
                             const domain = parts[1] || "domain";
 
-                            const ts = Math.floor(Date.now() / 1000) + index;
-                            const filename = `token_${prefix}_${domain}_${ts}.json`;
-                            const jsonString = JSON.stringify(tokenObj, null, 4);
-                            const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
-                            const url = window.URL.createObjectURL(blob);
-                            
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = filename;
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
-                            window.URL.revokeObjectURL(url);
-                        }, index * 300);
-                    });
-                    
-                    this.showToast(`🎉 成功触发 ${result.data.length} 个独立 Token 文件的下载！`, "success");
+                            const filename = `token_${prefix}_${domain}_${timestamp + index}.json`;
+                            zip.file(filename, JSON.stringify(tokenObj, null, 4));
+                        });
+
+                        const content = await zip.generateAsync({ type: "blob" });
+                        const url = window.URL.createObjectURL(content);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `CPA_Batch_Export_${data.length}_${timestamp}.zip`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        window.URL.revokeObjectURL(url);
+
+                        this.showToast(`🎉 成功打包导出 ${data.length} 个账号的压缩包！`, "success");
+                    } else {
+                        data.forEach((tokenObj, index) => {
+                            setTimeout(() => {
+                                const accEmail = tokenObj.email || "unknown";
+                                const parts = accEmail.split('@');
+                                const prefix = parts[0] || "user";
+                                const domain = parts[1] || "domain";
+
+                                const ts = Math.floor(Date.now() / 1000) + index;
+                                const filename = `token_${prefix}_${domain}_${ts}.json`;
+                                const jsonString = JSON.stringify(tokenObj, null, 4);
+                                const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
+                                const url = window.URL.createObjectURL(blob);
+
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = filename;
+                                document.body.appendChild(a);
+                                a.click();
+                                document.body.removeChild(a);
+                                window.URL.revokeObjectURL(url);
+                            }, index * 300);
+                        });
+                        this.showToast(`🎉 成功触发 ${data.length} 个独立 Token 文件的下载！`, "success");
+                    }
+
                     this.selectedAccounts = [];
                 } else {
                     this.showToast(result.message, "warning");
                 }
             } catch (e) {
-                this.showToast("导出请求失败，请检查网络", "error");
+                console.error(e);
+                this.showToast("导出请求失败，请检查网络或 JSZip 是否加载", "error");
+            }
+        },
+        async retryManualReviewLogin(account) {
+            if (!account || !account.email) return;
+            const confirmed = await this.customConfirm(
+                `确定现在尝试为 ${this.maskEmail(account.email)} 自动登录补拿 Token 吗？\n建议先确认已经间隔了一段时间，并且当前代理环境正常。`
+            );
+            if (!confirmed) return;
+
+            this.manualReviewLoadingEmail = account.email;
+            this.switchTab('console');
+            try {
+                const res = await this.authFetch('/api/manual-review-accounts/action', {
+                    method: 'POST',
+                    body: JSON.stringify({ email: account.email, action: 'retry_login' })
+                });
+                const result = await res.json();
+                this.showToast(result.message, result.status);
+                await this.fetchManualReviewAccounts(false);
+                await this.fetchAccounts(false);
+            } catch (e) {
+                this.showToast('人工复核自动登录请求失败，请检查后端。', 'error');
+            } finally {
+                this.manualReviewLoadingEmail = '';
             }
         },
 		maskEmail(email) {
@@ -448,15 +633,67 @@ createApp({
         },
 
 		async toggleSystem() {
-			if (this.isRunning) {
-				await this.stopTask();
-			} else {
-				let mode = 'normal';
-				if (this.config?.cpa_mode?.enable) mode = 'cpa';
-				if (this.config?.sub2api_mode?.enable) mode = 'sub2api';
-				await this.startTask(mode);
-			}
-		},
+            if (this.isToggling) return;
+            this.isToggling = true;
+            try {
+                if (this.isRunning) {
+                    this.isRunning = false;
+                    if (this._extDispatchTimer) {
+                        clearTimeout(this._extDispatchTimer);
+                        this._extDispatchTimer = null;
+                    }
+                    if (this.config?.reg_mode === 'extension') {
+                        window.postMessage({ type: "CMD_STOP_WORKER" }, "*");
+                        await this.authFetch('/api/ext/stop', { method: 'POST' });
+                        this.showToast("已向集群发送停止指令", "info");
+                    } else {
+                        await this.stopTask();
+                    }
+                } else {
+                    if (this.config?.reg_mode === 'extension') {
+                        this.showToast("📡 正在探测节点在线状态...", "info");
+                        try {
+                            const localId = localStorage.getItem('local_worker_id') || 'Node-Pilot-01';
+                            const checkRes = await this.authFetch(`/api/ext/check_node?worker_id=${localId}`);
+                            const checkData = await checkRes.json();
+                            if (!checkData.online) {
+                                const now = new Date();
+                                const timeStr = now.toLocaleTimeString('zh-CN', { hour12: false });
+                                this.showToast(`🚫 启动失败：节点 [${localId}] 未连接或已掉线！`, "error");
+                                this.logs.push({
+                                    parsed: true,
+                                    time: timeStr,
+                                    level: '系统',
+                                    text: '🛑 请确认是否安装了本项目plugin目录里的浏览器插件，并强制刷新该页面！',
+                                    raw: `[${timeStr}] [系统] 🛑 请确认是否安装了本项目plugin目录里的浏览器插件，并强制刷新该页面！`
+                                });
+                                return;
+                            }
+                        } catch (e) {
+
+                            this.showToast("🚫 无法连接到总控服务器检查状态", "error");
+                            return;
+                        }
+                        this.isRunning = true;
+                        this.currentTab = 'console';
+                        this.showToast("✅ 节点在线！已启动【浏览器插件托管】模式", "success");
+                        await this.authFetch('/api/ext/reset_stats', { method: 'POST' });
+                        await this.dispatchExtensionTask();
+
+                    } else {
+                        this.isRunning = true;
+                        this.currentTab = 'console';
+                        this.showToast("已启动【协议】模式", "success");
+                        let mode = 'normal';
+                        if (this.config?.cpa_mode?.enable) mode = 'cpa';
+                        if (this.config?.sub2api_mode?.enable) mode = 'sub2api';
+                        await this.startTask(mode);
+                    }
+                }
+            } finally {
+                this.isToggling = false;
+            }
+        },
         async startTask(mode) {
             try {
                 const res = await this.authFetch(`/api/start?mode=${mode}`, { method: 'POST' });
@@ -549,30 +786,6 @@ createApp({
                 this.showToast(result.message, result.status);
             } catch (e) {}
         },
-        async retryManualReviewLogin(account) {
-            if (!account || !account.email) return;
-            const confirmed = await this.customConfirm(
-                `确定现在尝试为 ${this.maskEmail(account.email)} 自动登录补拿 Token 吗？\n建议先确认已经间隔了一段时间，并且当前代理环境正常。`
-            );
-            if (!confirmed) return;
-
-            this.manualReviewLoadingEmail = account.email;
-            this.switchTab('console');
-            try {
-                const res = await this.authFetch('/api/manual-review-accounts/action', {
-                    method: 'POST',
-                    body: JSON.stringify({ email: account.email, action: 'retry_login' })
-                });
-                const result = await res.json();
-                this.showToast(result.message, result.status);
-                await this.fetchManualReviewAccounts(false);
-                await this.fetchAccounts(false);
-            } catch (e) {
-                this.showToast('人工复核自动登录请求失败，请检查后端。', 'error');
-            } finally {
-                this.manualReviewLoadingEmail = '';
-            }
-        },
         async clearLogs() {
             this.logs = []; 
             try { await this.authFetch('/api/logs/clear', { method: 'POST' }); } catch (e) {}
@@ -580,42 +793,53 @@ createApp({
 		initSSE() {
             if (this.evtSource) {
                 this.evtSource.close();
+                this.evtSource = null;
             }
             if (this.logFlushTimer) {
                 clearInterval(this.logFlushTimer);
+                this.logFlushTimer = null;
+            }
+            if (this.sseReconnectTimer) {
+                clearTimeout(this.sseReconnectTimer);
+                this.sseReconnectTimer = null;
             }
 
             const token = localStorage.getItem('auth_token');
-            const url = `/api/logs/stream?token=${token}`;
+            if (!token) return;
+            const timestamp = new Date().getTime();
+            const url = `/api/logs/stream?token=${token}&_t=${timestamp}`;
 
             this.evtSource = new EventSource(url);
             this.logFlushTimer = setInterval(() => {
                 if (this.logBuffer.length > 0) {
                     const container = document.getElementById('terminal-container');
-
                     let isScrolledToBottom = true;
                     if (container) {
-                        isScrolledToBottom = container.scrollHeight - container.clientHeight <= container.scrollTop + 50;
+                        isScrolledToBottom = container.scrollHeight - container.clientHeight <= container.scrollTop + 100;
                     }
                     this.logs.push(...this.logBuffer);
                     this.logBuffer = [];
+
                     if (this.logs.length > 500) {
                         this.logs.splice(0, this.logs.length - 500);
                     }
                     this.$nextTick(() => {
-                        if (container && (isScrolledToBottom || this.logs.length < 50)) {
-                            container.scrollTop = container.scrollHeight;
+                        if (container && (isScrolledToBottom || this.logs.length < 20)) {
+                            container.scrollTo({
+                                top: container.scrollHeight,
+                                behavior: 'auto'
+                            });
                         }
                     });
                 }
-            }, 200);
+            }, 300);
 
             this.evtSource.onmessage = (event) => {
                 let rawText = event.data;
                 rawText = rawText.trim();
                 if (!rawText) return;
 
-                let logObj = { parsed: false, raw: rawText };
+                let logObj = { id: Date.now() + Math.random(), parsed: false, raw: rawText };
                 const regex = /^\[(.*?)\]\s*\[(.*?)\]\s+(.*)$/;
                 const match = rawText.match(regex);
 
@@ -628,15 +852,20 @@ createApp({
                         raw: rawText
                     };
                 }
-
-                // 收到 SSE 消息时，只塞入缓冲池，绝对不触发 Vue 的直接渲染
                 this.logBuffer.push(logObj);
             };
-
             this.evtSource.onerror = (event) => {
-                console.error("SSE 连接异常，浏览器将自动尝试重连...", event);
-                if (!this.isLoggedIn) {
+                console.error("🔴 SSE 连接断开或异常。");
+                if (this.evtSource) {
                     this.evtSource.close();
+                    this.evtSource = null;
+                }
+
+                if (this.isLoggedIn) {
+                    console.log("⏳ 准备在 3 秒后强制重新建立日志通道...");
+                    this.sseReconnectTimer = setTimeout(() => {
+                        this.initSSE();
+                    }, 3000);
                 }
             };
         },
@@ -686,7 +915,7 @@ createApp({
 			if (!confirmed) return;
 			this.isLoadingSync = true;
 			this.showToast('🚀 多线程同步中，请耐心等待...', 'info');
-
+            this.currentTab = 'console';
 			try {
 				const res = await this.authFetch('/api/config/add_wildcard_dns', {
 					method: 'POST',
@@ -995,7 +1224,6 @@ createApp({
                             url: data.html_url || data.download_url || 'https://github.com/wenfxl/openai-cpa/releases/latest',
                             changelog: data.changelog
                         };
-                        // 只有用户主动点击时，才触发弹窗
                         if (isManual) {
                             this.promptUpdate();
                         }
@@ -1107,24 +1335,681 @@ createApp({
                 const res = await response.json();
 
                 if (res.status === 'success') {
-                    const content = JSON.stringify(res.data, null, 2);
-                    const blob = new Blob([content], { type: 'application/json' });
-                    const url = window.URL.createObjectURL(blob);
+                    const accounts = res.data.accounts;
+                    const timestamp = Math.floor(Date.now() / 1000);
 
-                    const link = document.createElement('a');
-                    link.href = url;
-                    link.setAttribute('download', `sub2api_export_${Date.now()}.json`);
-                    document.body.appendChild(link);
-                    link.click();
-                    link.remove();
+                    if (accounts.length > 1) {
+                        const zip = new JSZip();
 
-                    this.showToast(`成功导出 ${res.data.accounts.length} 个独立 Token 文件的下载！`, 'success');
+                        accounts.forEach((acc, index) => {
+                            const prefix = (acc.name || "user").split('@')[0];
+
+                            const singleAccountData = {
+                                exported_at: res.data.exported_at,
+                                proxies: res.data.proxies,
+                                accounts: [acc]
+                            };
+
+                            const filename = `sub2api_${prefix}_${timestamp + index}.json`;
+                            zip.file(filename, JSON.stringify(singleAccountData, null, 2));
+                        });
+
+                        const content = await zip.generateAsync({ type: "blob" });
+                        const url = window.URL.createObjectURL(content);
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = `Sub2Api_批量导出_${accounts.length}个_${timestamp}.zip`;
+                        document.body.appendChild(link);
+                        link.click();
+                        link.remove();
+                        window.URL.revokeObjectURL(url);
+
+                        this.showToast(`🎉 成功打包并下载 ${accounts.length} 个独立配置文件！`, 'success');
+                    } else {
+                        const content = JSON.stringify(res.data, null, 2);
+                        const blob = new Blob([content], { type: 'application/json' });
+                        const url = window.URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = `sub2api_export_${timestamp}.json`;
+                        document.body.appendChild(link);
+                        link.click();
+                        link.remove();
+                        window.URL.revokeObjectURL(url);
+
+                        this.showToast(`成功导出 ${accounts.length} 个账号到单个文件`, 'success');
+                    }
+
+                    this.selectedAccounts = [];
                 } else {
                     this.showToast(res.message || '导出失败', 'error');
                 }
             } catch (error) {
                 console.error('导出异常:', error);
-                this.showToast('导出请求异常', 'error');
+                this.showToast('导出异常，请检查 JSZip 是否加载', 'error');
+            }
+        },
+
+        async fetchCloudAccounts() {
+            if (this.cloudFilters.length === 0) {
+                this.cloudAccounts = [];
+                this.cloudTotal = 0;
+                return;
+            }
+            const types = this.cloudFilters.join(',');
+            try {
+                const res = await this.authFetch(`/api/cloud/accounts?types=${types}&page=${this.cloudPage}&page_size=${this.cloudPageSize}`);
+                const data = await res.json();
+                if(data.status === 'success') {
+                    this.cloudAccounts = (data.data || []).map(acc => ({
+                        ...acc,
+                        last_check: this.localCheckTimes[acc.id] || acc.last_check || '-',
+                        details: this.localCloudDetails[acc.id] || acc.details || {},
+                        _loading: null
+                    }));
+                    this.cloudTotal = data.total || 0;
+                    this.selectedCloud = [];
+                } else {
+                    this.showToast(data.message, "error");
+                }
+            } catch (e) {
+                console.error(e);
+                this.showToast("获取云端数据失败", "error");
+            }
+        },
+
+        async singleCloudAction(acc, action) {
+            if (action === 'delete' && !confirm('⚠️ 危险操作：确认在远端彻底删除该账号吗？')) return;
+
+            const actionName = action === 'check' ? '测活' : (action === 'enable' ? '启用' : (action === 'disable' ? '禁用' : '删除'));
+            this.showToast(`正在对账号进行 ${actionName}，请稍候...`, 'info');
+            acc._loading = action;
+
+            try {
+                const res = await this.authFetch('/api/cloud/action', {
+                    method: 'POST',
+                    body: JSON.stringify({ accounts: [{id: String(acc.id), type: acc.account_type}], action: action })
+                });
+                const result = await res.json();
+                if (result.updated_details && result.updated_details[acc.id]) {
+                    acc.details = result.updated_details[acc.id];
+                    this.localCloudDetails[acc.id] = result.updated_details[acc.id];
+                }
+                if (action === 'enable' && result.status !== 'error') acc.status = 'active';
+                if (action === 'disable' && result.status !== 'error') acc.status = 'disabled';
+
+                if (action === 'check') {
+                    const now = new Date().toLocaleString('zh-CN', { hour12: false });
+                    this.localCheckTimes[acc.id] = now;
+                    acc.last_check = now;
+
+                    if (result.status === 'warning') {
+                        acc.status = 'disabled';
+                    }
+                }
+                this.showToast(result.message, result.status);
+
+                setTimeout(() => {
+                    if (action === 'delete' || action === 'check') {
+                        this.fetchCloudAccounts();
+                    }
+                }, 1500);
+
+            } catch (e) {
+                this.showToast("操作异常，请检查网络", "error");
+            } finally {
+                acc._loading = null;
+            }
+        },
+
+        async bulkCloudAction(action) {
+            if (this.selectedCloud.length === 0) {
+                return this.showToast('请先勾选需要操作的账号', 'warning');
+            }
+            if (action === 'delete' && !confirm(`⚠️ 危险操作：确认删除选中的 ${this.selectedCloud.length} 个账号吗？`)) return;
+
+            const actionName = action === 'check' ? '测活' : (action === 'enable' ? '启用' : (action === 'disable' ? '禁用' : '删除'));
+            this.showToast(`正在批量 ${actionName} ${this.selectedCloud.length} 个账号，耗时较长请耐心等待...`, 'info');
+            this.isCloudActionLoading = true;
+
+            try {
+                const res = await this.authFetch('/api/cloud/action', {
+                    method: 'POST',
+                    body: JSON.stringify({ accounts: this.selectedCloud, action: action })
+                });
+                const result = await res.json();
+                if (result.updated_details) {
+                    this.selectedCloud.forEach(selected => {
+                        const targetAcc = this.cloudAccounts.find(a => String(a.id) === String(selected.id) && a.account_type === selected.type);
+                        if (result.updated_details) {
+                            this.selectedCloud.forEach(selected => {
+                                if (result.updated_details[selected.id]) {
+                                    this.localCloudDetails[selected.id] = result.updated_details[selected.id]; // 存入缓存
+                                }
+                            });
+                        }
+                    });
+                }
+                if (action === 'check') {
+                    const now = new Date().toLocaleString('zh-CN', { hour12: false });
+                    this.selectedCloud.forEach(c => { this.localCheckTimes[c.id] = now; });
+                }
+
+                this.showToast(result.message, result.status);
+                this.fetchCloudAccounts();
+                this.selectedCloud = [];
+            } catch (e) {
+                this.showToast("批量操作异常", "error");
+            } finally {
+                this.isCloudActionLoading = false;
+            }
+        },
+        toggleAllCloud(e) {
+            if (e.target.checked) {
+                this.selectedCloud = this.cloudAccounts.map(a => ({ id: String(a.id), type: a.account_type }));
+            } else {
+                this.selectedCloud = [];
+            }
+        },
+        viewCloudDetails(acc) {
+            if (!acc.details || Object.keys(acc.details).length === 0) {
+                this.showToast("CPA 账号暂无用量缓存，请先点击【测活】拉取！", "warning");
+                return;
+            }
+            this.currentCloudDetail = acc;
+            this.showCloudDetailModal = true;
+        },
+        changeCloudPage(newPage) {
+            if (newPage < 1 || newPage > this.cloudTotalPages) return;
+            this.cloudPage = newPage;
+            this.fetchCloudAccounts();
+        },
+        changeCloudPageSize() {
+            this.cloudPage = 1;
+            this.selectedCloud = [];
+            this.fetchCloudAccounts();
+        },
+        async remoteControlNode(nodeName, action) {
+            try {
+                // 调用带验证的控制接口
+                const res = await this.authFetch('/api/cluster/control', {
+                    method: 'POST',
+                    body: JSON.stringify({ node_name: nodeName, action: action })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast(`✅ 指令 [${action}] 已成功发送至节点: ${nodeName}`, 'success'); //
+                } else {
+                    this.showToast(data.message, 'warning'); //
+                }
+            } catch (e) {
+                this.showToast('控制请求异常', 'error'); //
+            }
+        },
+        formatDuration(seconds) {
+            if (!seconds || seconds < 0) return "0s";
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+
+            let res = "";
+            if (h > 0) res += h + "h ";
+            if (m > 0 || h > 0) res += m + "m ";
+            res += s + "s";
+            return res;
+        },
+        getOnlineDuration(joinTime) {
+            if (!joinTime) return '0s';
+            const diff = this.nowTimestamp - Math.floor(joinTime);
+            return this.formatDuration(diff);
+        },
+        maskValue(val, type = 'auto') {
+            if (!val) return '未配置';
+            if (type === 'email' || (type === 'auto' && val.includes('@'))) {
+                const parts = val.split('@');
+                return parts[0].substring(0, 2) + '***@' + '***';
+            }
+            if (type === 'url' || (type === 'auto' && val.startsWith('http'))) {
+                try {
+                    const url = new URL(val);
+                    return `${url.protocol}//*****${url.port ? ':'+url.port : ''}${url.pathname.length > 1 ? '/...' : ''}`;
+                } catch(e) { return val.substring(0, 8) + '...'; }
+            }
+            return val.length > 8 ? val.substring(0, 4) + '***' + val.slice(-4) : val.substring(0, 2) + '***';
+        },
+        initClusterWebSocket() {
+            if (this.clusterWs) {
+                this.clusterWs.close();
+            }
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const token = localStorage.getItem('auth_token');
+            const wsUrl = `${protocol}//${window.location.host}/api/cluster/view_ws?token=${token}`;
+
+            this.clusterWs = new WebSocket(wsUrl);
+
+            this.clusterWs.onmessage = (event) => {
+                const res = JSON.parse(event.data);
+                if (res.status === 'success') {
+                    this.clusterNodes = res.nodes;
+                }
+            };
+
+            this.clusterWs.onclose = () => {
+                setTimeout(() => {
+                    if (this.currentTab === 'cluster' && this.isLoggedIn) {
+                        this.initClusterWebSocket();
+                    }
+                }, 3000);
+            };
+        },
+        async dispatchExtensionTask() {
+            if (!this.isRunning) return;
+
+            try {
+                const res = await this.authFetch('/api/ext/generate_task');
+                const data = await res.json();
+                if (!this.isRunning) {
+                    this.showToast("任务已生成，但系统已停止，已丢弃该任务。", "warning");
+                    return;
+                }
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString('zh-CN', { hour12: false });
+
+                if (data.status !== 'success') {
+                    this.logs.push({ parsed: true, time: timeStr, level: '总控', text: `任务生成失败: ${data.message}`, raw: `[${timeStr}] [总控] 任务生成失败: ${data.message}` });
+                    return;
+                }
+
+                const task = data.task_data;
+                const taskId = "TASK_" + new Date().getTime();
+
+                this.logs.push({ parsed: true, time: timeStr, level: '总控', text: `📦 任务包裹已打包，目标邮箱:${task.email}，正在进行...`, raw: `[${timeStr}] [总控] 📦 任务包裹已打包，目标邮箱:${task.email}，正在进行...` });
+
+                this.$nextTick(() => {
+                    const container = document.getElementById('terminal-container');
+                    if (container) container.scrollTop = container.scrollHeight;
+                });
+
+                window.postMessage({
+                    type: "CMD_EXECUTE_TASK",
+                    payload: {
+                        taskId: taskId,
+                        apiUrl: window.location.origin,
+                        token: localStorage.getItem('auth_token'),
+                        email: task.email,
+                        email_jwt: task.email_jwt,
+                        password: task.password,
+                        firstName: task.firstName,
+                        lastName: task.lastName,
+                        birthday: task.birthday,
+                        registerUrl: task.registerUrl,
+                        code_verifier: task.code_verifier,
+                        expected_state: task.expected_state
+                    }
+                }, "*");
+
+            } catch (error) {
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString('zh-CN', { hour12: false });
+                this.logs.push({ parsed: true, time: timeStr, level: '总控', text: `下发任务异常: ${error.message}`, raw: `[${timeStr}] [总控] 下发任务异常: ${error.message}` });
+            }
+        },
+
+        syncTokenToExtension() {
+            let localWorkerId = localStorage.getItem('local_worker_id');
+            if (!localWorkerId) return; // 还没有 ID 则等待 Ready 信号生成
+
+            const payload = {
+                apiUrl: window.location.origin,
+                token: localStorage.getItem('auth_token'), // 💥 确保抓取登录后的最新 Token
+                workerId: localWorkerId
+            };
+
+            window.postMessage({ type: "CMD_INIT_NODE", payload: payload }, "*");
+            console.log(`📡 [总控] 身份同步指令已下发: ${localWorkerId}`);
+        },
+
+        listenToExtension() {
+            if (this.config?.reg_mode !== 'extension') return;
+            if (this._hasExtensionListener) {
+                this.syncTokenToExtension();
+                return;
+            }
+
+            this._hasExtensionListener = true;
+            this.isExtConnected = false;
+
+            window.addEventListener("message", async (event) => {
+                if (!event.data) return;
+
+                if (event.data.type === "WORKER_READY") {
+                    const now = new Date();
+                    const timeStr = now.toLocaleTimeString('zh-CN', { hour12: false });
+
+                    if (this._extDetectionTimer) {
+                        clearInterval(this._extDetectionTimer);
+                        this._extDetectionTimer = null;
+                        console.log("🎯 [总控] 锁定插件频段，探测雷达已关闭。");
+                    }
+
+                    this.isExtConnected = true;
+
+                    let localWorkerId = localStorage.getItem('local_worker_id');
+                    if (!localWorkerId) {
+                        localWorkerId = 'Node-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+                        localStorage.setItem('local_worker_id', localWorkerId);
+                    }
+                    console.log(`[集群管控] 本机节点识别码: ${localWorkerId}`);
+
+                    this.logs.push({
+                        parsed: true, time: timeStr, level: '总控',
+                        text: '✅ 插件连接成功，正在同步身份凭证...',
+                        raw: `[${timeStr}] [总控] ✅ 插件连接成功，正在同步身份凭证...`
+                    });
+
+                    this.$nextTick(() => {
+                        const container = document.getElementById('terminal-container');
+                        if (container) container.scrollTop = container.scrollHeight;
+                    });
+
+                    this.syncTokenToExtension();
+                    return;
+                }
+
+                if (event.data.type === "WORKER_LOG_REPLY") {
+                    const now = new Date();
+                    const timeStr = now.toLocaleTimeString('zh-CN', { hour12: false });
+                    this.logs.push({
+                        parsed: true, time: timeStr, level: '节点',
+                        text: event.data.log, raw: `[${timeStr}] [节点] ${event.data.log}`
+                    });
+                    this.$nextTick(() => {
+                        const container = document.getElementById('terminal-container');
+                        if (container) container.scrollTop = container.scrollHeight;
+                    });
+                }
+
+                if (event.data.type === "WORKER_RESULT_REPLY") {
+                    const result = event.data.result;
+                    try {
+                        await this.authFetch('/api/ext/submit_result', {
+                            method: 'POST',
+                            body: JSON.stringify(result)
+                        });
+                    } catch (e) {
+                        console.error("统计上报失败", e);
+                    }
+
+                    if (result.status === 'success') {
+                        this.showToast(`🎉 收到节点捷报！注册成功！`, "success");
+                    } else {
+                        this.showToast(`❌ 节点汇报失败: ${result.error_msg}`, "error");
+                    }
+
+                    if (this.isRunning) {
+                        const targetCount = this.config?.normal_mode?.target_count || 0;
+                        if (targetCount > 0 && this.stats && this.stats.success >= targetCount) {
+                            this.showToast(`🎯 已达到目标产出数量 (${targetCount})，自动停止调度！`, "success");
+                            this.isRunning = false;
+                            window.postMessage({ type: "CMD_STOP_WORKER" }, "*");
+
+                            const timeStr = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+                            this.logs.push({
+                                parsed: true, time: timeStr, level: '总控',
+                                text: `🛑 目标产量已达成，总控引擎已自动挂起。`,
+                                raw: `[${timeStr}] [总控] 🛑 目标产量已达成，总控引擎已自动挂起。`
+                            });
+                            return;
+                        }
+                        this.showToast(`准备下发下一个插件任务...`, "info");
+                        this._extDispatchTimer = setTimeout(() => {
+                            this._extDispatchTimer = null;
+                            this.dispatchExtensionTask();
+                        }, 4000);
+                    }
+                }
+            });
+
+            if (this._extDetectionTimer) clearInterval(this._extDetectionTimer);
+            this._extDetectionTimer = setInterval(() => {
+                if (this.config?.reg_mode === 'extension' && !this.isExtConnected) {
+                    console.log("📡 [总控] 正在扫描空域...");
+                    window.postMessage({ type: "CHECK_EXTENSION_READY" }, "*");
+                } else if (this.config?.reg_mode !== 'extension') {
+                    clearInterval(this._extDetectionTimer);
+                    this._extDetectionTimer = null;
+                }
+            }, 2000);
+        },
+        async changeRegMode(mode) {
+            if (!this.config) return;
+            this.config.reg_mode = mode;
+
+            await this.saveConfig();
+            this.showToast(`模式已切换为: ${mode === 'protocol' ? '纯协议模式' : '插件托管模式'}`, 'info');
+
+            if (mode === 'extension') {
+                this.listenToExtension();
+            } else {
+                if (this._extDetectionTimer) {
+                    clearInterval(this._extDetectionTimer);
+                    this._extDetectionTimer = null;
+                }
+                this.isExtConnected = false;
+                window.postMessage({ type: "CMD_STOP_WORKER" }, "*");
+                console.log("🛑 [总控] 已进入协议模式，切断插件链路。");
+            }
+        },
+        async fetchMailboxes(isManual = false) {
+            if (isManual) this.mailboxPage = 1;
+            try {
+                const res = await this.authFetch(`/api/mailboxes?page=${this.mailboxPage}&page_size=${this.mailboxPageSize}`);
+                const data = await res.json();
+                if(data.status === 'success') {
+                    this.mailboxes = data.data;
+                    this.totalMailboxes = data.total || this.mailboxes.length;
+                    this.selectedMailboxes = [];
+                    if (isManual) this.showToast("邮箱库已刷新！", "success");
+                }
+            } catch (e) {
+                console.error("获取邮箱库失败:", e);
+            }
+        },
+        changeMailboxPage(newPage) {
+            if (newPage < 1 || newPage > this.mailboxTotalPages) return;
+            this.mailboxPage = newPage;
+            this.fetchMailboxes();
+        },
+        changeMailboxPageSize() {
+            this.mailboxPage = 1;
+            this.fetchMailboxes();
+        },
+        toggleAllMailboxes(event) {
+            if (event.target.checked) this.selectedMailboxes = [...this.mailboxes];
+            else this.selectedMailboxes = [];
+        },
+        async submitImportMailboxes() {
+            if (!this.importMailboxText.trim()) return this.showToast("请输入内容", "warning");
+            this.isImportingMailbox = true;
+            try {
+                const res = await this.authFetch('/api/mailboxes/import', {
+                    method: 'POST',
+                    body: JSON.stringify({ raw_text: this.importMailboxText })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast(`成功导入 ${data.count} 个邮箱！`, "success");
+                    this.showImportMailboxModal = false;
+                    this.importMailboxText = '';
+                    this.fetchMailboxes(true);
+                } else {
+                    this.showToast("导入失败: " + data.message, "error");
+                }
+            } catch (e) {
+                this.showToast("导入请求失败", "error");
+            } finally {
+                this.isImportingMailbox = false;
+            }
+        },
+        async deleteSelectedMailboxes() {
+            if (this.selectedMailboxes.length === 0) return;
+            const confirmed = await this.customConfirm(`确定要删除选中的 ${this.selectedMailboxes.length} 个邮箱吗？`);
+            if (!confirmed) return;
+
+            const idsToDelete = this.selectedMailboxes.map(m => m.id || m.email);
+            try {
+                const res = await this.authFetch('/api/mailboxes/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ ids: idsToDelete })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast("删除成功", "success");
+                    this.fetchMailboxes();
+                } else {
+                    this.showToast("删除失败: " + data.message, "error");
+                }
+            } catch (e) {
+                this.showToast("请求异常", "error");
+            }
+        },
+        openOutlookAuthModal(mailbox) {
+            const cid = mailbox.client_id || this.config?.local_microsoft?.client_id || this.BUILTIN_CLIENT_ID;
+            if (!cid) {
+                this.showToast("🚫 无法获取有效的 Client ID！", "warning");
+                return;
+            }
+            this.outlookAuth.mailbox = mailbox;
+            this.outlookAuth.currentClientId = cid;
+            this.outlookAuth.authUrl = '';
+            this.outlookAuth.pastedUrl = '';
+            this.outlookAuth.showModal = true;
+        },
+
+        async generateOutlookAuthUrl() {
+            this.outlookAuth.isGenerating = true;
+            try {
+                const res = await this.authFetch('/api/mailboxes/oauth_url', {
+                    method: 'POST',
+                    body: JSON.stringify({ client_id: this.outlookAuth.currentClientId })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.outlookAuth.authUrl = data.url;
+                } else {
+                    this.showToast("生成失败: " + data.message, "error");
+                }
+            } catch (e) {
+                this.showToast("网络请求异常", "error");
+            } finally {
+                this.outlookAuth.isGenerating = false;
+            }
+        },
+
+        async submitOutlookAuthCode() {
+            this.outlookAuth.isLoading = true;
+            try {
+                const res = await this.authFetch('/api/mailboxes/oauth_exchange', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        email: this.outlookAuth.mailbox.email,
+                        client_id: this.outlookAuth.currentClientId,
+                        code_or_url: this.outlookAuth.pastedUrl
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast(data.message, "success");
+                    this.outlookAuth.showModal = false;
+                    if (this.outlookAuth.mailbox.isFission && data.refresh_token) {
+                        this.config.local_microsoft.refresh_token = data.refresh_token;
+                        await this.saveConfig();
+                        this.showToast("✅ Token 已自动填入并保存！", "success");
+                    } else {
+                        this.fetchMailboxes();
+                    }
+                } else {
+                    this.showToast("换取失败: " + data.message, "error");
+                }
+            } catch (e) {
+                this.showToast("网络请求异常", "error");
+            } finally {
+                this.outlookAuth.isLoading = false;
+            }
+        },
+        openFissionAuthModal() {
+            if (!this.config.local_microsoft.master_email) {
+                this.showToast("🚫 请先填写裂变主邮箱账号！", "warning");
+                return;
+            }
+
+            this.outlookAuth.mailbox = {
+                email: this.config.local_microsoft.master_email,
+                isFission: true
+            };
+            this.outlookAuth.currentClientId = this.config.local_microsoft.client_id || this.BUILTIN_CLIENT_ID;
+            this.outlookAuth.authUrl = '';
+            this.outlookAuth.pastedUrl = '';
+            this.outlookAuth.showModal = true;
+        },
+        exportSelectedMailboxesToTxt() {
+            if (this.selectedMailboxes.length === 0) {
+                this.showToast("请先勾选需要导出的邮箱", "warning");
+                return;
+            }
+            const textContent = this.selectedMailboxes
+                .map(m => {
+                    const pwd = m.password || '';
+                    const cid = m.client_id || '';
+                    const rt = m.refresh_token || '';
+                    return `${m.email}----${pwd}----${cid}----${rt}`;
+                })
+                .join('\n');
+
+            const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+
+            const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+            link.download = `microsoft_mailboxes_${dateStr}.txt`;
+
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+
+            this.showToast(`🎉 成功导出 ${this.selectedMailboxes.length} 个邮箱到 TXT`, 'success');
+            this.selectedMailboxes = [];
+        },
+        async recoverSelectedMailboxes() {
+            if (this.selectedMailboxes.length === 0) {
+                this.showToast("请先勾选需要恢复的邮箱", "warning");
+                return;
+            }
+
+            const confirmed = await this.customConfirm(`确定要将选中的 ${this.selectedMailboxes.length} 个邮箱状态重置为【正常/闲置】吗？\n(可用于解除死号误标)`);
+            if (!confirmed) return;
+
+            const emailsToRecover = this.selectedMailboxes.map(m => m.email);
+
+            try {
+                const res = await this.authFetch('/api/mailboxes/update_status', {
+                    method: 'POST',
+                    body: JSON.stringify({ emails: emailsToRecover, status: 0 })
+                });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    this.showToast(data.message, "success");
+                    this.selectedMailboxes = [];
+                    this.fetchMailboxes();
+                } else {
+                    this.showToast("恢复失败: " + data.message, "error");
+                }
+            } catch (e) {
+                this.showToast("请求异常", "error");
             }
         },
     }

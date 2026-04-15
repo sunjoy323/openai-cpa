@@ -9,20 +9,20 @@ import threading
 import sys
 import subprocess
 import yaml
+import urllib.parse
 import httpx
 from fastapi import APIRouter, Depends, Header, Query, Request, WebSocket, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
-from typing import List
-
+from typing import List, Optional, Any
 from cloudflare import Cloudflare
 from utils import core_engine, db_manager
 from utils.config import reload_all_configs
 from utils.integrations.sub2api_client import Sub2APIClient
 from utils.integrations.tg_notifier import send_tg_msg_async
 from utils.email_providers.gmail_oauth_handler import GmailOAuthHandler
-
-from global_state import VALID_TOKENS, CLUSTER_NODES, NODE_COMMANDS, cluster_lock, log_history, engine, verify_token
+from curl_cffi import requests as cffi_requests
+from global_state import VALID_TOKENS, CLUSTER_NODES, NODE_COMMANDS, cluster_lock, log_history, engine, verify_token, worker_status
 import utils.config as cfg
 
 router = APIRouter()
@@ -74,7 +74,35 @@ class ClusterReportReq(BaseModel): node_name: str; secret: str; stats: dict; log
 
 class ClusterControlReq(BaseModel): node_name: str; action: str
 
+class ExtResultReq(BaseModel):
+    status: str
+    task_id: Optional[str] = ""
+    email: Optional[str] = ""
+    password: Optional[str] = ""
+    error_msg: Optional[str] = ""
+    token_data: Optional[str] = ""
+    callback_url: Optional[str] = ""
+    code_verifier: Optional[str] = ""
+    expected_state: Optional[str] = ""
+    error_type: Optional[str] = "failed"
 
+class ImportMailboxReq(BaseModel):
+    raw_text: str
+
+class DeleteMailboxReq(BaseModel):
+    ids: list[Any]
+
+class OutlookAuthUrlReq(BaseModel):
+    client_id: str
+
+class OutlookExchangeReq(BaseModel):
+    email: str
+    client_id: str
+    code_or_url: str
+
+class UpdateMailboxStatusReq(BaseModel):
+    emails: list[str]
+    status: int
 # ==========================================
 # 辅助函数
 # ==========================================
@@ -205,11 +233,13 @@ async def stop_task(token: str = Depends(verify_token)):
     avg_time = round(elapsed_time / stats["success"], 1) if stats["success"] > 0 else 0.0
     target_str = stats["target"] if stats["target"] > 0 else "∞"
     template_str = getattr(core_engine.cfg, 'TG_BOT', {}).get("template_stop", "🛑 停止：成功 {success}/{target}")
+    pwd_blocked = stats["pwd_blocked"] if stats["pwd_blocked"] > 0 else 0
+    phone_blocked = stats["phone_verify"] if stats["phone_verify"] > 0 else 0
 
     try:
         msg = template_str.format(success_rate=success_rate, success=stats['success'], target=target_str,
                                   failed=stats['failed'], retries=stats['retries'], elapsed_time=elapsed_time,
-                                  avg_time=avg_time)
+                                  pwd_blocked=pwd_blocked,phone_verify=phone_blocked,avg_time=avg_time)
     except Exception:
         msg = f"⚠️ TG 模板渲染出错：未知的变量格式。\n请检查配置面板中的模板变量是否正确填写。"
 
@@ -222,8 +252,14 @@ async def stop_task(token: str = Depends(verify_token)):
 async def get_stats(token: str = Depends(verify_token)):
     stats = core_engine.run_stats
     is_running = engine.is_running()
+    current_reg_mode = getattr(core_engine.cfg, 'REG_MODE', 'protocol')
 
-    if is_running:
+    if current_reg_mode == 'extension':
+        is_running = stats.get("ext_is_running", False)
+    else:
+        is_running = engine.is_running()
+
+    if is_running or (current_reg_mode == 'extension' and stats["start_time"] > 0):
         elapsed = round(time.time() - stats["start_time"], 1) if stats.get("start_time", 0) > 0 else 0
         stats["_frozen_elapsed"] = elapsed
     else:
@@ -238,9 +274,11 @@ async def get_stats(token: str = Depends(verify_token)):
         progress_pct = min(100, round((stats["success"] / stats["target"]) * 100, 1))
     elif stats["success"] > 0:
         progress_pct = 100
-
-    current_mode = "CPA 仓管" if getattr(core_engine.cfg, 'ENABLE_CPA_MODE', False) else (
-        "Sub2Api 仓管" if getattr(core_engine.cfg, 'ENABLE_SUB2API_MODE', False) else "常规量产")
+    if current_reg_mode == 'extension':
+        current_mode = "插件托管 (古法)"
+    else:
+        current_mode = "CPA 仓管" if getattr(core_engine.cfg, 'ENABLE_CPA_MODE', False) else (
+            "Sub2Api 仓管" if getattr(core_engine.cfg, 'ENABLE_SUB2API_MODE', False) else "常规量产")
 
     return {
         "success": stats["success"], "failed": stats["failed"], "retries": stats["retries"],
@@ -290,6 +328,15 @@ async def get_config(token: str = Depends(verify_token)):
     if isinstance(config_data.get("sub2api_mode"), dict):
         config_data["sub2api_mode"].pop("min_remaining_weekly_percent", None)
     config_data["web_password"] = config_data.get("web_password", "admin")
+    if "local_microsoft" not in config_data:
+        config_data["local_microsoft"] = {
+            "enable_fission": False,
+            "master_email": "",
+            "client_id": "",
+            "refresh_token": ""
+        }
+
+
     return config_data
 
 
@@ -333,16 +380,32 @@ async def add_wildcard_dns(req: CFSyncExistingReq, token: str = Depends(verify_t
                     zone_id = zone_data["result"][0]["id"]
 
                     records = [
-                        {"type": "MX", "name": "*", "content": "route3.mx.cloudflare.net", "priority": 36, "ttl": 300},
-                        {"type": "MX", "name": "*", "content": "route2.mx.cloudflare.net", "priority": 25, "ttl": 300},
-                        {"type": "MX", "name": "*", "content": "route1.mx.cloudflare.net", "priority": 51, "ttl": 300},
-                        {"type": "TXT", "name": "*", "content": '"v=spf1 include:_spf.mx.cloudflare.net ~all"',
-                         "ttl": 300}
+                        {"type": "MX", "name": "*", "content": "route3.mx.cloudflare.net", "priority": 36},
+                        {"type": "MX", "name": "*", "content": "route2.mx.cloudflare.net", "priority": 25},
+                        {"type": "MX", "name": "*", "content": "route1.mx.cloudflare.net", "priority": 51},
+                        {"type": "TXT", "name": "*", "content": '"v=spf1 include:_spf.mx.cloudflare.net ~all"'}
                     ]
                     for rec in records:
                         rec_resp = await client.post(
                             f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records", headers=headers,
                             json=rec)
+                        rec_data = rec_resp.json()
+                        if not rec_data.get("success"):
+                            errors = rec_data.get("errors", [])
+                            is_quota_exceeded = any(err.get("code") == 81045 for err in errors)
+                            is_exist = any(err.get("code") in {81057, 81058} for err in errors)
+
+                            if is_quota_exceeded:
+                                print(f"[{core_engine.ts()}] [CF] [{domain}] 记录配额已超出，无法继续创建，请手动去cf官网清除记录后在推送。")
+                                continue
+                            elif is_exist:
+                                print(f"[{core_engine.ts()}] [CF] [{domain}] 记录已存在无需重复创建。")
+                                continue
+
+                            print(f"[{core_engine.ts()}] [ERROR] [{domain}] 记录创建报错: {errors}")
+                        print(f"[{core_engine.ts()}] [SUCCESS] [{domain}] 创建成功")
+                        await asyncio.sleep(0.5)
+                    print(f"[{core_engine.ts()}] [CF] ✅ [{domain}] 解析处理成功，防止遗漏，请等待日志输出完毕后，重新点击推送！")
                     return True
                 except:
                     return False
@@ -818,7 +881,6 @@ async def cluster_view_ws(websocket: WebSocket, token: str = Query(None)):
     except Exception:
         pass
 
-
 @router.post("/api/cluster/upload_accounts")
 def cluster_upload_accounts(req: ClusterUploadAccountsReq):
     if req.secret != str(getattr(core_engine.cfg, '_c', {}).get("cluster_secret", "wenfxl666")).strip(): return {
@@ -836,3 +898,251 @@ def cluster_upload_accounts(req: ClusterUploadAccountsReq):
     except:
         pass
     return {"status": "success", "message": f"成功接收 {success_count} 个账号"}
+
+#模式二注册
+@router.get("/api/ext/generate_task")
+def ext_generate_task(token: str = Depends(verify_token)):
+    from utils.email_providers.mail_service import mask_email, get_email_and_token, clear_sticky_domain
+    from utils.register import _generate_password, generate_random_user_info, generate_oauth_url
+    import utils.config as cfg
+    import time
+    print(f"[{cfg.ts()}] [INFO] 正在进行插件古法注册模式，请稍后...")
+    try:
+        cfg.GLOBAL_STOP = False
+        clear_sticky_domain()
+
+        email = None
+        email_jwt = None
+        for attempt in range(3):
+            print(f"[{cfg.ts()}] [INFO] 正在进行邮箱创建...")
+            email, email_jwt = get_email_and_token(proxies=None)
+            if email:
+                break
+            time.sleep(1.5)
+
+        if not email:
+            return {"status": "error", "message": "邮箱获取超时或暂无库存，请稍候"}
+
+        user_info = generate_random_user_info()
+        password = _generate_password()
+
+        oauth_reg = generate_oauth_url()
+
+        print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）下发任务数据 (昵称: {user_info['name']}) (密码: {password}) (生日: {user_info['birthdate']})...")
+
+        name_parts = user_info['name'].split(' ')
+        return {
+            "status": "success",
+            "task_data": {
+                "email": email,
+                "email_jwt": email_jwt,
+                "password": password,
+                "firstName": name_parts[0] if len(name_parts) > 0 else "John",
+                "lastName": name_parts[1] if len(name_parts) > 1 else "Doe",
+                "birthday": user_info['birthdate'],
+                "registerUrl": oauth_reg.auth_url,
+                "code_verifier": oauth_reg.code_verifier,
+                "expected_state": oauth_reg.state
+            }
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"任务生成失败: {str(e)}"}
+
+@router.get("/api/ext/get_mail_code")
+def ext_get_mail_code(email: str, email_jwt: str = "", type: str = "signup", max_attempts: int = 20, token: str = Depends(verify_token)):
+    from utils.email_providers.mail_service import get_oai_code
+    try:
+        code = get_oai_code(email, jwt=email_jwt, proxies=None, max_attempts=max_attempts)
+        if code:
+            return {"status": "success", "code": code}
+        return {"status": "pending"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@router.post("/api/ext/submit_result")
+def ext_submit_result(req: ExtResultReq, token: str = Depends(verify_token)):
+    from utils import core_engine
+    from utils.register import submit_callback_url
+
+    if req.status == "success":
+        token_json = req.token_data
+        if not token_json and req.callback_url:
+            try:
+                token_json = submit_callback_url(
+                    callback_url=req.callback_url,
+                    expected_state=req.expected_state,
+                    code_verifier=req.code_verifier
+                )
+            except Exception as e:
+                print(f"换取 Token 失败: {e}")
+                return {"status": "error", "message": "Token 换取失败"}
+        db_manager.save_account_to_db(req.email, req.password, token_json)
+        core_engine.run_stats['success'] = core_engine.run_stats.get('success', 0) + 1
+
+        return {"status": "success", "message": "战利品已入库"}
+    else:
+        core_engine.run_stats['failed'] = core_engine.run_stats.get('failed', 0) + 1
+        is_dead_account = False
+        if req.error_type == 'phone_verify':
+            core_engine.run_stats['phone_verify'] = core_engine.run_stats.get('phone_verify', 0) + 1
+            is_dead_account = True
+        elif req.error_type == 'pwd_blocked':
+            core_engine.run_stats['pwd_blocked'] = core_engine.run_stats.get('pwd_blocked', 0) + 1
+        if is_dead_account and getattr(cfg, "EMAIL_API_MODE", "") == "local_microsoft" and req.email:
+            db_manager.update_local_mailbox_status(req.email, 3)
+            print(f"[{cfg.ts()}] [WARNING] 插件上报邮箱不可用，已将邮箱标记为死号: {req.email}")
+        return {"status": "success", "message": "异常统计已录入看板"}
+
+
+@router.post("/api/ext/heartbeat")
+def ext_heartbeat(worker_id: str, token: str = Depends(verify_token)):
+    worker_status[worker_id] = time.time()
+    return {"status": "success", "message": "ok"}
+
+
+@router.get("/api/ext/check_node")
+def check_node_status(worker_id: str, token: str = Depends(verify_token)):
+    last_seen = worker_status.get(worker_id)
+    if not last_seen:
+        return {"status": "success", "online": False, "reason": "never_connected"}
+    is_online = (time.time() - last_seen) < 15
+    return {
+        "status": "success",
+        "online": is_online,
+        "last_seen": last_seen
+    }
+
+@router.post("/api/ext/reset_stats")
+def ext_reset_stats(token: str = Depends(verify_token)):
+    from utils import core_engine
+    import time
+    core_engine.run_stats.update({
+        "success": 0, "failed": 0, "retries": 0,
+        "pwd_blocked": 0, "phone_verify": 0,
+        "start_time": time.time(),
+        "target": getattr(core_engine.cfg, 'NORMAL_TARGET_COUNT', 0),
+        "ext_is_running": True
+    })
+    return {"status": "success"}
+
+@router.post("/api/ext/stop")
+def ext_stop(token: str = Depends(verify_token)):
+    from utils import core_engine
+    core_engine.run_stats["ext_is_running"] = False
+    return {"status": "success"}
+
+@router.get("/api/mailboxes")
+async def get_mailboxes(page: int = Query(1), page_size: int = Query(50), token: str = Depends(verify_token)):
+    result = db_manager.get_local_mailboxes_page(page, page_size)
+    return {"status": "success", "data": result["data"], "total": result["total"], "page": page, "page_size": page_size}
+
+
+@router.post("/api/mailboxes/import")
+async def import_mailboxes(req: ImportMailboxReq, token: str = Depends(verify_token)):
+    if not req.raw_text: return {"status": "error", "message": "内容为空"}
+
+    parsed_mailboxes = []
+    lines = req.raw_text.strip().split("\n")
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith("#"): continue
+        parts = [p.strip() for p in text.split("----")]
+        if len(parts) >= 2 and "@" in parts[0]:
+            parsed_mailboxes.append({
+                "email": parts[0],
+                "password": parts[1],
+                "client_id": parts[2] if len(parts) >= 3 else "",
+                "refresh_token": parts[3] if len(parts) >= 4 else ""
+            })
+
+    if not parsed_mailboxes: return {"status": "error", "message": "未能识别出有效数据"}
+    count = db_manager.import_local_mailboxes(parsed_mailboxes)
+    return {"status": "success", "count": count}
+
+
+@router.post("/api/mailboxes/delete")
+async def delete_mailboxes(req: DeleteMailboxReq, token: str = Depends(verify_token)):
+    if not req.ids: return {"status": "error", "message": "未收到任何要删除的ID"}
+    if db_manager.delete_local_mailboxes(req.ids):
+        return {"status": "success", "message": "删除成功"}
+    return {"status": "error", "message": "删除操作失败"}
+
+
+@router.post("/api/mailboxes/oauth_url")
+async def get_outlook_oauth_url(req: OutlookAuthUrlReq, token: str = Depends(verify_token)):
+    if not req.client_id:
+        return {"status": "error", "message": "缺少 Client ID"}
+
+    redirect_uri = "http://localhost"
+    scope_str = urllib.parse.quote("offline_access https://graph.microsoft.com/Mail.Read")
+    auth_url = (
+        f"https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+        f"?client_id={req.client_id}"
+        f"&response_type=code"
+        f"&redirect_uri={urllib.parse.quote(redirect_uri)}"
+        f"&response_mode=query"
+        f"&scope={scope_str}"
+    )
+    return {"status": "success", "url": auth_url}
+
+
+@router.post("/api/mailboxes/oauth_exchange")
+async def exchange_outlook_oauth_code(req: OutlookExchangeReq, token: str = Depends(verify_token)):
+    try:
+        auth_code = req.code_or_url.strip()
+        if "http" in auth_code or "code=" in auth_code:
+            parsed_url = urllib.parse.urlparse(auth_code)
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+            extracted = query_params.get("code", [None])[0]
+            if extracted:
+                auth_code = extracted
+            else:
+                return {"status": "error", "message": "无法从网址中提取 code 参数，请确保复制了完整的网址。"}
+
+        token_url = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+        payload = {
+            "client_id": req.client_id,
+            "grant_type": "authorization_code",
+            "code": auth_code,
+            "redirect_uri": "http://localhost"
+        }
+
+        proxy_url = getattr(cfg, 'DEFAULT_PROXY', None)
+        proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+
+        response = cffi_requests.post(token_url, data=payload, proxies=proxies, timeout=15, impersonate="chrome110")
+        data = response.json()
+
+        if response.status_code == 200:
+            refresh_token = data.get("refresh_token")
+            import sqlite3
+            from utils.db_manager import DB_PATH
+            with sqlite3.connect(DB_PATH, timeout=10) as conn:
+                conn.execute(
+                    "UPDATE local_mailboxes SET client_id = ?, refresh_token = ?, status = 0 WHERE email = ?",
+                    (req.client_id, refresh_token, req.email)
+                )
+                conn.commit()
+            return {"status": "success", "message": f"授权成功！已为 {req.email} 绑定永久 Token。", "refresh_token": refresh_token}
+        else:
+            return {"status": "error", "message": f"获取失败: {data.get('error_description', data)}"}
+
+    except Exception as e:
+        return {"status": "error", "message": f"处理异常: {str(e)}"}
+
+
+@router.post("/api/mailboxes/update_status")
+async def update_mailboxes_status(req: UpdateMailboxStatusReq, token: str = Depends(verify_token)):
+    if not req.emails:
+        return {"status": "error", "message": "未收到任何邮箱"}
+
+    success_count = 0
+    for email in req.emails:
+        try:
+            db_manager.update_local_mailbox_status(email, req.status)
+            success_count += 1
+        except Exception as e:
+            pass
+
+    return {"status": "success", "message": f"成功将 {success_count} 个邮箱状态重置！"}

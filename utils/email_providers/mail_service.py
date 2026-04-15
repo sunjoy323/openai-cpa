@@ -111,8 +111,24 @@ def mask_email(text: str) -> str:
     if not cfg.ENABLE_EMAIL_MASKING or not text:
         return text
     if "@" in text:
-        prefix, _ = text.split("@", 1)
-        return f"{prefix}@***.***"
+        try:
+            user_part, _ = text.split("@", 1)
+
+            if "+" in user_part:
+                main_acc, alias_suffix = user_part.split("+", 1)
+
+                m_keep = 2 if len(main_acc) > 2 else 1
+                masked_main = main_acc[:m_keep] + "***"
+
+                a_keep = 2 if len(alias_suffix) > 2 else 1
+                masked_alias = alias_suffix[:a_keep] + "***"
+
+                return f"{masked_main}+{masked_alias}@***.***"
+            else:
+                u_keep = 2 if len(user_part) > 2 else 1
+                return f"{user_part[:u_keep]}***@***.***"
+        except:
+            return "******@***.***"
 
     domain_match = re.match(r"^([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|\d{1,3}(?:\.\d{1,3}){3})(:\d+)?$", text)
     if domain_match:
@@ -193,6 +209,93 @@ def get_email_and_token(proxies: Any = None) -> tuple:
                 return email, mailbox_id
         except Exception as e:
             print(f"[{cfg.ts()}] [ERROR] mail-curl 获取邮箱异常: {e}")
+        return None, None
+
+    if mode == "fvia":
+        try:
+            from utils.email_providers.fvia_service import FviaMailService
+            current_token = getattr(cfg, 'FVIA_TOKEN', '')
+
+            if not current_token:
+                print(f"[{cfg.ts()}] [ERROR] 未在配置中检测到 Fvia Token，请前往前端填写！")
+                return None, None
+
+            fs = FviaMailService(token=current_token, proxies=mail_proxies)
+            email, token = fs.create_email()
+
+            if email and token:
+                set_last_email(email)
+                print(f"[{cfg.ts()}] [INFO] FviaInboxes 成功分配邮箱: ({mask_email(email)})")
+                return email, token
+            else:
+                print(f"[{cfg.ts()}] [ERROR] FviaInboxes 获取域名列表失败。")
+        except Exception as e:
+            print(f"[{cfg.ts()}] [ERROR] FviaInboxes 流程异常: {e}")
+        return None, None
+
+    if mode == "tmailor":
+        try:
+            from utils.email_providers.tmailor_service import TmailorService
+            current_token = getattr(cfg, 'TMAILOR_CURRENT_TOKEN', '')
+            ts_service = TmailorService(current_token=current_token, proxies=mail_proxies)
+            email, token = ts_service.create_email()
+
+            if email and token:
+                set_last_email(email)
+                print(f"[{cfg.ts()}] [INFO] Tmailor 成功创建邮箱: ({mask_email(email)})")
+                return email, token
+            else:
+                print(f"[{cfg.ts()}] [ERROR] Tmailor 获取邮箱失败，请检查 Token 是否过期。")
+        except Exception as e:
+            print(f"[{cfg.ts()}] [ERROR] Tmailor 流程异常: {e}")
+        return None, None
+
+    if mode == "inboxes":
+        try:
+            from utils.email_providers.inboxes_service import InboxesService
+            ibs = InboxesService(proxies=mail_proxies)
+            email, token = ibs.create_email()
+
+            if email and token:
+                set_last_email(email)
+                print(f"[{cfg.ts()}] [INFO] Inboxes.com 成功分配邮箱: ({mask_email(email)})")
+                return email, token
+            else:
+                print(f"[{cfg.ts()}] [ERROR] Inboxes.com 申请失败。")
+        except Exception as e:
+            print(f"[{cfg.ts()}] [ERROR] Inboxes.com 流程异常: {e}")
+        return None, None
+
+    if mode == "temporarymail":
+        try:
+            from utils.email_providers.temporarymail_service import TemporaryMailService
+            tm_service = TemporaryMailService(proxies=mail_proxies)
+            email, token = tm_service.create_email()
+
+            if email and token:
+                set_last_email(email)
+                print(f"[{cfg.ts()}] [INFO] TemporaryMail 成功分配邮箱: ({mask_email(email)})")
+                return email, token
+            else:
+                print(f"[{cfg.ts()}] [ERROR] TemporaryMail 申请失败。")
+        except Exception as e:
+            print(f"[{cfg.ts()}] [ERROR] TemporaryMail 流程异常: {e}")
+        return None, None
+
+    if mode == "temporam":
+        try:
+            from utils.email_providers.temporam_service import TemporamService
+            tp_service = TemporamService(proxies=mail_proxies)
+            email, token = tp_service.create_email()
+
+            if email and token:
+                set_last_email(email)
+                print(f"[{cfg.ts()}] [INFO] Temporam 成功生成邮箱: ({mask_email(email)})")
+                return email, token
+            else:
+                print(f"[{cfg.ts()}] [ERROR] Temporam 获取邮箱失败")
+        except Exception as e:
+            print(f"[{cfg.ts()}] [ERROR] Temporam 流程异常: {e}")
         return None, None
 
     if mode == "luckmail":
@@ -320,6 +423,21 @@ def get_email_and_token(proxies: Any = None) -> tuple:
         except Exception as e:
             print(f"[{cfg.ts()}] [ERROR] TempMail.org 流程异常: {e}")
         return None, None
+
+    if mode == "local_microsoft":
+        from utils.email_providers.local_microsoft_service import LocalMicrosoftService
+        ms_service = LocalMicrosoftService(proxies=mail_proxies)
+
+        mailbox_info = ms_service.get_unused_mailbox()
+        if not mailbox_info:
+            cfg.POOL_EXHAUSTED = True
+            print(f"[{cfg.ts()}] [WARNING] 微软邮箱库已耗尽，请前往前端导入更多账号。")
+            return None, None
+
+        email = mailbox_info["email"]
+        set_last_email(email)
+        print(f"[{cfg.ts()}] [INFO] 微软库分配并锁定账号: ({mask_email(email)})")
+        return email, json.dumps(mailbox_info, ensure_ascii=False)
 
     ai_switch_on = getattr(cfg, 'AI_ENABLE_PROFILE', False)
     if ai_switch_on:
@@ -631,12 +749,72 @@ def _create_and_login_imap_conn():
         except Exception:
             pass
         raise
+
+
+def _poll_local_ms_for_oai_code_graph(ms_service, target_email: str, mailbox_dict: dict, max_attempts: int) -> str:
+    from datetime import datetime
+    import time
+
+    assigned_at = float(mailbox_dict.get("assigned_at") or time.time())
+    tgt = target_email.lower().strip()
+    master_email = tgt.split('+')[0] + '@' + tgt.split('@')[1] if '+' in tgt else tgt
+
+    processed_msg_ids = set()
+
+    print(f"[{cfg.ts()}] [INFO] 进入 Graph 轮询器，靶向目标: {mask_email(tgt)}", flush=True)
+
+    for attempt in range(max_attempts):
+        if getattr(cfg, 'GLOBAL_STOP', False): return ""
+
+        messages = ms_service.fetch_openai_messages(mailbox_dict)
+        if not messages:
+            if attempt % 2 == 0:
+                print(f"[{cfg.ts()}] [INFO] 第 {attempt + 1} 次轮询: 未发现任何邮件", flush=True)
+        else:
+            for msg in messages:
+                msg_id = msg.get('id')
+                if msg_id in processed_msg_ids:
+                    continue
+                raw_date = msg.get('receivedDateTime', '').replace('Z', '+00:00')
+                try:
+                    received_ts = datetime.fromisoformat(raw_date).timestamp()
+                    if received_ts < assigned_at - 60:
+                        continue
+                except Exception:
+                    continue
+                sender = str(msg.get('from', {}).get('emailAddress', {}).get('address', '')).lower()
+                if "openai.com" not in sender:
+                    continue
+                subject = msg.get('subject', '').lower()
+                if not any(k in subject for k in ["code", "verify", "chatgpt", "openai"]):
+                    continue
+
+                recipients = [str(r.get('emailAddress', {}).get('address', '')).lower().strip()
+                              for r in msg.get('toRecipients', [])]
+                body_content = msg.get('body', {}).get('content', '')
+
+                is_hit = (tgt in recipients) or (f"to: {tgt}" in body_content.lower()) or (tgt in body_content.lower())
+
+                if not is_hit and master_email in recipients and (time.time() - received_ts < 30):
+                    is_hit = True
+
+                if is_hit:
+                    code = _extract_otp_code(f"{subject}\n{body_content}")
+                    if code:
+                        print(f"\n[{cfg.ts()}] [SUCCESS] 🎯 成功捕获专属验证码: {code} -> {mask_email(tgt)}", flush=True)
+                        return code
+
+                processed_msg_ids.add(msg_id)
+
+        time.sleep(5)
+    return ""
 def get_oai_code(
         email: str,
         jwt: str = "",
         proxies: Any = None,
         processed_mail_ids: set = None,
         pattern: str = OTP_CODE_PATTERN,
+        max_attempts: int = 20,
 ) -> str:
     """轮询各邮箱服务商收取 OpenAI 验证码，返回 6 位字符串或空串。"""
     mailbox_id = jwt
@@ -665,7 +843,30 @@ def get_oai_code(
             print(f"\n[{cfg.ts()}] [ERROR] IMAP 初始登录失败: {e}{extra_tip}")
             mail_conn = None
 
-    for attempt in range(1, 21):
+    local_ms_account = None
+    if mode == "local_microsoft":
+        try:
+            parsed_jwt = json.loads(jwt or "{}")
+            local_ms_account = parsed_jwt if isinstance(parsed_jwt, dict) else None
+        except:
+            pass
+
+        if local_ms_account:
+            local_ms_account["email"] = str(local_ms_account.get("email") or email).strip()
+            local_ms_account["assigned_at"] = time.time() - 30
+            from utils.email_providers.local_microsoft_service import LocalMicrosoftService
+            ms_service = LocalMicrosoftService(proxies=mail_proxies)
+            return _poll_local_ms_for_oai_code_graph(
+                ms_service=ms_service,
+                target_email=email,
+                mailbox_dict=local_ms_account,
+                max_attempts=max_attempts
+            )
+        else:
+            print(f"\n[{cfg.ts()}] [ERROR] 缺少微软邮箱凭据，无法收信。")
+            return ""
+
+    for attempt in range(1, max_attempts + 1):
         if getattr(cfg, 'GLOBAL_STOP', False): return ""
         try:
             if mode == "mail_curl":
@@ -693,6 +894,146 @@ def get_oai_code(
                                     processed_mail_ids.add(m_id)
                                     print(f"\n[{cfg.ts()}] [SUCCESS] mail_curl ({mask_email(email)})邮箱提取成功: {code}")
                                     return code
+            elif mode == "fvia":
+                from utils.email_providers.fvia_service import FviaMailService
+                fs = FviaMailService(token=jwt, proxies=mail_proxies)
+                msgs = fs.get_inbox(email)
+
+                for m in msgs:
+                    m_id = m.get("id")
+                    if not m_id or m_id in processed_mail_ids:
+                        continue
+
+                    subject = str(m.get("subject", ""))
+                    sender = str(m.get("from", "")).lower()
+
+                    if "openai" in sender or "openai" in subject.lower() or "chatgpt" in subject:
+
+                        code = _extract_otp_code(subject)
+
+                        if code:
+                            processed_mail_ids.add(m_id)
+                            print(
+                                f"\n[{cfg.ts()}] [SUCCESS] Fvia ({mask_email(email)}) 邮箱提取成功: {code}")
+                            return code
+
+            elif mode == "temporarymail":
+                if not jwt:
+                    return ""
+                try:
+                    from utils.email_providers.temporarymail_service import TemporaryMailService
+                    tm_service = TemporaryMailService(proxies=mail_proxies)
+                    inbox_dict = tm_service.get_inbox_list(jwt)
+
+                    for m_id, m_info in inbox_dict.items():
+                        if m_id in processed_mail_ids:
+                            continue
+
+                        sender = str(m_info.get("from", "")).lower()
+                        detail = tm_service.get_email_detail(m_id)
+                        subject = str(detail.get("subject", ""))
+
+                        if "openai" in sender or "openai" in subject.lower() or "chatgpt" in subject:
+                            code = _extract_otp_code(subject)
+                            if code:
+                                processed_mail_ids.add(m_id)
+                                print(f"\n[{cfg.ts()}] [SUCCESS] TemporaryMail ({mask_email(email)}) 邮箱提取成功: {code}")
+                                return code
+                except Exception:
+                    pass
+
+            elif mode == "inboxes":
+                if not jwt:
+                    return ""
+                try:
+                    from utils.email_providers.inboxes_service import InboxesService
+                    ibs = InboxesService(proxies=mail_proxies)
+                    msgs = ibs.get_inbox(email, jwt)
+
+                    for m in msgs:
+                        m_id = str(m.get("uid", ""))
+                        if not m_id or m_id in processed_mail_ids:
+                            continue
+
+                        subject = str(m.get("s", ""))
+                        sender = str(m.get("f", "")).lower()
+
+                        if "openai" in sender or "openai" in subject.lower() or "chatgpt" in subject:
+                            code = _extract_otp_code(subject)
+                            if code:
+                                processed_mail_ids.add(m_id)
+                                print(f"\n[{cfg.ts()}] [SUCCESS] Inboxes.com ({mask_email(email)}) 邮箱提取成功: {code}")
+                                return code
+                except Exception:
+                    pass
+
+            elif mode == "tmailor":
+                if not jwt:
+                    print(f"\n[{cfg.ts()}] [ERROR] Tmailor 缺少 token，无法提取验证码！")
+                    return ""
+                try:
+                    from utils.email_providers.tmailor_service import TmailorService
+                    current_token = getattr(cfg, 'TMAILOR_CURRENT_TOKEN', '')
+                    if hasattr(cfg, 'tmailor') and isinstance(cfg.tmailor, dict):
+                        current_token = cfg.tmailor.get('current_token', current_token)
+
+                    ts_service = TmailorService(current_token=current_token, proxies=mail_proxies)
+                    inbox_data = ts_service.get_inbox(jwt)
+
+                    for mail_item in inbox_data.values():
+                        msg_id = str(mail_item.get("uuid", ""))
+                        if not msg_id or msg_id in processed_mail_ids:
+                            continue
+
+                        sender = str(mail_item.get("sender_name", "")).lower()
+                        sender_email = str(mail_item.get("sender_email", "")).lower()
+                        subject = str(mail_item.get("subject", ""))
+
+                        if "openai" not in sender and "openai" not in sender_email and "openai" not in subject.lower():
+                            continue
+
+                        email_id = mail_item.get("email_id")
+                        mail_body, real_subject = ts_service.read_email(jwt, msg_id, email_id)
+
+                        if mail_body or real_subject:
+                            content = f"{real_subject}\n{mail_body}"
+                            code = _extract_otp_code(content)
+                            if code:
+                                processed_mail_ids.add(msg_id)
+                                print(f"\n[{cfg.ts()}] [SUCCESS] Tmailor ({mask_email(email)}) 提取成功: {code}")
+                                return code
+                except Exception as e:
+                    pass
+
+            elif mode == "temporam":
+                if not jwt:
+                    print(f"\n[{cfg.ts()}] [ERROR] Temporam 缺少 token(即邮箱号)，无法提取验证码！")
+                    return ""
+                try:
+                    from utils.email_providers.temporam_service import TemporamService
+                    tp_service = TemporamService(proxies=mail_proxies)
+                    raw_data = tp_service.get_messages(jwt)
+                    email_list = raw_data.get("data", []) if isinstance(raw_data, dict) else []
+
+                    for msg in email_list:
+                        msg_id = str(msg.get("id", msg.get("uuid", "")))
+
+                        if not msg_id or msg_id in processed_mail_ids:
+                            continue
+                        from_email = str(msg.get("fromEmail", "")).lower()
+                        subject = str(msg.get("subject", ""))
+                        summary = str(msg.get("summary", ""))
+                        full_text = f"{from_email}\n{subject}\n{summary}"
+                        if "openai" not in from_email and "openai" not in full_text.lower():
+                            continue
+                        code = _extract_otp_code(full_text)
+                        if code:
+                            processed_mail_ids.add(msg_id)
+                            print(f"\n[{cfg.ts()}] [SUCCESS] Temporam ({mask_email(email)})邮箱提取成功: {code}")
+                            return code
+
+                except Exception as e:
+                    pass
 
             elif mode == "cloudmail":
                 token = get_cm_token(mail_proxies)
@@ -969,7 +1310,7 @@ def get_oai_code(
 
             elif mode == "imap":
                 print(
-                    f"\n[{cfg.ts()}] [DEBUG] IMAP 轮询第 {attempt}/20 次，"
+                    f"\n[{cfg.ts()}] [DEBUG] IMAP 轮询第 {attempt}/{max_attempts} 次，"
                     f"当前已处理邮件数={len(processed_mail_ids)}。"
                 )
                 if not mail_conn:
@@ -1098,7 +1439,7 @@ def get_oai_code(
                             print(f"\n[{cfg.ts()}] [WARNING] IMAP 扫描文件夹异常 {folder}: {e}")
                 if not matched_code and mail_conn is not None:
                     print(
-                        f"\n[{cfg.ts()}] [DEBUG] IMAP 第 {attempt}/20 次轮询结束，"
+                        f"\n[{cfg.ts()}] [DEBUG] IMAP 第 {attempt}/{max_attempts} 次轮询结束，"
                         f"本轮未找到验证码邮件。"
                     )
 
@@ -1217,7 +1558,7 @@ def get_oai_code(
             else:
                 print(".", end="", flush=True)
         if attempt % 3 == 0:
-            print(f"[{cfg.ts()}] [INFO] 仍在查询邮箱，暂未收到验证码 (已尝试 {attempt}/20)...")
+            print(f"[{cfg.ts()}] [INFO] 仍在查询邮箱，暂未收到验证码 (已尝试 {attempt}/{max_attempts})...")
         time.sleep(3)
 
     print(f"\n[{cfg.ts()}] [ERROR] ({mask_email(email)})邮箱接收验证码超时")

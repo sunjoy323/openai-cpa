@@ -3,6 +3,8 @@
 # https://github.com/dreamhunter2333/cloudflare_temp_email
 # https://github.com/maillab/cloud-mail
 # https://github.com/s12ryt/mail-curl
+
+reg_mode: "protocol"
 # 可选值: "imap" / "freemail" / "cloudflare_temp_email" / "cloudmail" / "mail_curl" / "luckmail"
 email_api_mode: "cloudflare_temp_email"
 
@@ -45,6 +47,16 @@ imap:
   # 16位应用专用密码，谷歌邮箱要去https://myaccount.google.com/apppasswords这里创建专属应用密码
   pass: ""
 
+# [模式 "本地微软邮箱" 专属]
+local_microsoft:
+  # 是否开启无限裂变模式 (true/false)
+  enable_fission: false
+  # 裂变主邮箱（用来接收验证码）
+  master_email: ""
+  client_id: ""
+  refresh_token: ""
+  pool_fission: false
+
 # [模式 "freemail" 专属]
 freemail:
   #访问链接
@@ -85,7 +97,16 @@ luckmail:
   email_type: ms_graph
   variant_mode: ''
   reuse_purchased: true
-  tag_id: 
+  tag_id:
+# [temporam 邮箱配置]
+temporam:
+  cookie: ''
+# [tmailor 鸭子邮箱配置]
+tmailor:
+  current_token:
+# [FviaInboxes 配置]
+fvia:
+  token: ''
 # [代理配置]
 # openai注册时代理地址，例子：http://127.0.0.1:7897。如果是国外服务器此项可以不填
 default_proxy: ""

@@ -830,6 +830,7 @@ def _retry_oauth_login_flow(
     proxies: Any = None,
     processed_mails: Optional[set] = None,
     record_manual_on_add_phone: bool = False,
+    is_takeover: bool = False,
 ) -> Dict[str, Any]:
     processed_mails = processed_mails if processed_mails is not None else set()
     try:
@@ -890,86 +891,262 @@ def _retry_oauth_login_flow(
                 message="OAuth 登录起始授权失败，请看日志里的原始响应。",
             )
 
-        pwd_page_url = str(
-            (_json_dict(login_start_resp) if login_start_resp.status_code == 200 else {})
-            .get("continue_url") or ""
-        ).strip()
-        if not pwd_page_url:
-            note = "authorize/continue 返回中没有 continue_url。"
-            _log_oauth_chain_failure(
-                "missing_password_page_url",
-                current_url=current_url,
-                resp=login_start_resp,
-                trace=oauth_trace,
-                note=note,
-            )
-            return _oauth_retry_result(
-                False,
-                stage="missing_password_page_url",
-                current_url=current_url,
-                note=note,
-                message="没有拿到密码页地址，OAuth 流程被截断。",
-            )
-        resp, current_url = _follow_redirect_chain_local(
-            s_log, pwd_page_url, proxies, trace=oauth_trace, stage="password_page"
-        )
+        start_json = _json_dict(login_start_resp)
+        next_entry_url = _extract_next_url(start_json)
+        if is_takeover:
+            if next_entry_url:
+                try:
+                    resp, current_url = _follow_redirect_chain_local(
+                        s_log, next_entry_url, proxies, trace=oauth_trace, stage="takeover_password_page"
+                    )
+                except Exception:
+                    current_url = next_entry_url
+                    resp = login_start_resp
+            else:
+                current_url = "https://auth.openai.com/log-in/password"
+                resp = login_start_resp
 
-        sentinel_pwd = _challenge_token(s_log, "password_verify", proxies, ctx=log_ctx)
-        login_pwd_headers = _oai_headers(
-            s_log.cookies.get("oai-did") or "",
-            {
-                "Referer": current_url,
-                "content-type": "application/json",
-            },
-        )
-        if sentinel_pwd:
-            login_pwd_headers["openai-sentinel-token"] = sentinel_pwd
-        pwd_login_resp = _post_with_retry(
-            s_log,
-            "https://auth.openai.com/api/accounts/password/verify",
-            headers=login_pwd_headers,
-            json_body={"password": password},
-            proxies=proxies,
-        )
-        if pwd_login_resp.status_code != 200:
-            note = "password/verify 未返回 200。"
-            _log_registration_http_failure("密码验证", pwd_login_resp)
-            _log_oauth_chain_failure(
-                "password_verify",
-                current_url=current_url,
-                resp=pwd_login_resp,
-                trace=oauth_trace,
-                note=note,
+            if cfg.EMAIL_API_MODE == "luckmail":
+                try:
+                    from utils.email_providers.luckmail_service import LuckMailService
+                    print(f"[{cfg.ts()}] [INFO] 正在检测 LuckMail 邮箱（{mask_email(email)}）是否存活...")
+                    lm_service = LuckMailService(
+                        api_key=cfg.LUCKMAIL_API_KEY,
+                        proxies=proxies if getattr(cfg, 'USE_PROXY_FOR_EMAIL', True) else None
+                    )
+                    if not lm_service.check_token_alive(email_jwt):
+                        note = "LuckMail 邮箱已失效，无法继续老账号接管。"
+                        print(f"[{cfg.ts()}] [ERROR] {note}")
+                        return _oauth_retry_result(
+                            False,
+                            stage="takeover_mailbox_invalid",
+                            current_url=current_url,
+                            note=note,
+                            message=note,
+                        )
+                except Exception as e:
+                    print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
+
+            print(f"[{cfg.ts()}] [INFO] OAuth 重登录识别为老账号接管，开始触发无密码邮箱验证码...")
+            sentinel_takeover_send = _challenge_token(s_log, "password-verify", proxies, ctx=log_ctx)
+            takeover_send_headers = _oai_headers(
+                s_log.cookies.get("oai-did") or "",
+                {
+                    "Referer": current_url or "https://auth.openai.com/log-in/password",
+                    "content-type": "application/json",
+                },
             )
-            return _oauth_retry_result(
-                False,
-                stage="password_verify",
-                current_url=current_url,
-                note=note,
-                message="密码验证失败，请看日志里的原始响应。",
+            if sentinel_takeover_send:
+                takeover_send_headers["openai-sentinel-token"] = sentinel_takeover_send
+            takeover_send_resp = _post_with_retry(
+                s_log,
+                "https://auth.openai.com/api/accounts/passwordless/send-otp",
+                headers=takeover_send_headers,
+                proxies=proxies,
+                timeout=30,
+            )
+            if takeover_send_resp.status_code != 200:
+                note = "老账号接管发信未返回 200。"
+                _log_registration_http_failure("老账号接管发信", takeover_send_resp)
+                _log_oauth_chain_failure(
+                    "takeover_send_otp",
+                    current_url=current_url,
+                    resp=takeover_send_resp,
+                    trace=oauth_trace,
+                    note=note,
+                )
+                return _oauth_retry_result(
+                    False,
+                    stage="takeover_send_otp",
+                    current_url=current_url,
+                    note=note,
+                    message="老账号接管发信失败，请看日志里的原始响应。",
+                )
+
+            takeover_code = ""
+            for resend_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
+                if resend_attempt > 0:
+                    print(f"\n[{cfg.ts()}] [INFO] 老账号接管验证码重试 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
+                    try:
+                        sentinel_takeover_resend = _challenge_token(
+                            s_log, "authorize_continue", proxies, ctx=log_ctx
+                        )
+                        takeover_resend_headers = _oai_headers(
+                            s_log.cookies.get("oai-did") or "",
+                            {
+                                "Referer": current_url or "https://auth.openai.com/log-in/password",
+                                "content-type": "application/json",
+                            },
+                        )
+                        if sentinel_takeover_resend:
+                            takeover_resend_headers["openai-sentinel-token"] = sentinel_takeover_resend
+                        _post_with_retry(
+                            s_log,
+                            "https://auth.openai.com/api/accounts/email-otp/resend",
+                            headers=takeover_resend_headers,
+                            json_body={},
+                            proxies=proxies,
+                            timeout=15,
+                        )
+                        time.sleep(2)
+                    except Exception as e:
+                        print(f"[{cfg.ts()}] [WARNING] 老账号接管重发请求异常: {e}")
+
+                takeover_code = get_oai_code(
+                    email,
+                    jwt=email_jwt,
+                    proxies=proxies,
+                    processed_mail_ids=processed_mails,
+                )
+                if takeover_code:
+                    break
+
+            if not takeover_code:
+                note = "老账号接管阶段一直未收到邮箱验证码。"
+                return _oauth_retry_result(
+                    False,
+                    stage="takeover_email_otp_missing",
+                    current_url=current_url,
+                    note=note,
+                    message="老账号接管验证码没收到，暂时无法拿到 token。",
+                )
+
+            sentinel_takeover_validate = _challenge_token(
+                s_log, "authorize_continue", proxies, ctx=log_ctx
+            )
+            takeover_validate_headers = _oai_headers(
+                s_log.cookies.get("oai-did") or "",
+                {
+                    "Referer": current_url or "https://auth.openai.com/email-verification",
+                    "content-type": "application/json",
+                },
+            )
+            if sentinel_takeover_validate:
+                takeover_validate_headers["openai-sentinel-token"] = sentinel_takeover_validate
+            takeover_code_resp = _post_with_retry(
+                s_log,
+                "https://auth.openai.com/api/accounts/email-otp/validate",
+                headers=takeover_validate_headers,
+                json_body={"code": takeover_code},
+                proxies=proxies,
+            )
+            if takeover_code_resp.status_code != 200:
+                note = "老账号接管验证码校验未通过。"
+                _log_registration_http_failure("老账号接管 OTP 校验", takeover_code_resp)
+                _log_oauth_chain_failure(
+                    "takeover_email_otp_validate",
+                    current_url=current_url,
+                    resp=takeover_code_resp,
+                    trace=oauth_trace,
+                    note=note,
+                )
+                return _oauth_retry_result(
+                    False,
+                    stage="takeover_email_otp_validate",
+                    current_url=current_url,
+                    note=note,
+                    message="老账号接管验证码校验失败，请看日志里的回包。",
+                )
+
+            next_url = _extract_next_url(_json_dict(takeover_code_resp))
+            if not next_url:
+                note = "老账号接管 OTP 校验成功，但响应里没有 continue_url。"
+                _log_oauth_chain_failure(
+                    "missing_next_url_after_takeover_otp",
+                    current_url=current_url,
+                    resp=takeover_code_resp,
+                    trace=oauth_trace,
+                    note=note,
+                )
+                return _oauth_retry_result(
+                    False,
+                    stage="missing_next_url_after_takeover_otp",
+                    current_url=current_url,
+                    note=note,
+                    message="老账号接管 OTP 虽然通过了，但后续跳转地址丢了。",
+                )
+
+            resp, current_url = _follow_redirect_chain_local(
+                s_log, next_url, proxies, trace=oauth_trace, stage="post_takeover_email_otp"
+            )
+        else:
+            pwd_page_url = str(next_entry_url or "").strip()
+            if not pwd_page_url:
+                note = "authorize/continue 返回中没有 continue_url。"
+                _log_oauth_chain_failure(
+                    "missing_password_page_url",
+                    current_url=current_url,
+                    resp=login_start_resp,
+                    trace=oauth_trace,
+                    note=note,
+                )
+                return _oauth_retry_result(
+                    False,
+                    stage="missing_password_page_url",
+                    current_url=current_url,
+                    note=note,
+                    message="没有拿到密码页地址，OAuth 流程被截断。",
+                )
+            resp, current_url = _follow_redirect_chain_local(
+                s_log, pwd_page_url, proxies, trace=oauth_trace, stage="password_page"
             )
 
-        pwd_json = _json_dict(pwd_login_resp) if pwd_login_resp.status_code == 200 else {}
-        next_url = _extract_next_url(pwd_json)
-        if not next_url:
-            note = "password/verify 响应里没有 continue_url，也无法从 page.type 推导下一跳。"
-            _log_oauth_chain_failure(
-                "missing_next_url_after_password_verify",
-                current_url=current_url,
-                resp=pwd_login_resp,
-                trace=oauth_trace,
-                note=note,
+            sentinel_pwd = _challenge_token(s_log, "password_verify", proxies, ctx=log_ctx)
+            login_pwd_headers = _oai_headers(
+                s_log.cookies.get("oai-did") or "",
+                {
+                    "Referer": current_url,
+                    "content-type": "application/json",
+                },
             )
-            return _oauth_retry_result(
-                False,
-                stage="missing_next_url_after_password_verify",
-                current_url=current_url,
-                note=note,
-                message="密码通过了，但后续跳转地址丢了。",
+            if sentinel_pwd:
+                login_pwd_headers["openai-sentinel-token"] = sentinel_pwd
+            pwd_login_resp = _post_with_retry(
+                s_log,
+                "https://auth.openai.com/api/accounts/password/verify",
+                headers=login_pwd_headers,
+                json_body={"password": password},
+                proxies=proxies,
             )
-        resp, current_url = _follow_redirect_chain_local(
-            s_log, next_url, proxies, trace=oauth_trace, stage="post_password_verify"
-        )
+            if pwd_login_resp.status_code != 200:
+                note = "password/verify 未返回 200。"
+                _log_registration_http_failure("密码验证", pwd_login_resp)
+                _log_oauth_chain_failure(
+                    "password_verify",
+                    current_url=current_url,
+                    resp=pwd_login_resp,
+                    trace=oauth_trace,
+                    note=note,
+                )
+                return _oauth_retry_result(
+                    False,
+                    stage="password_verify",
+                    current_url=current_url,
+                    note=note,
+                    message="密码验证失败，请看日志里的原始响应。",
+                )
+
+            pwd_json = _json_dict(pwd_login_resp) if pwd_login_resp.status_code == 200 else {}
+            next_url = _extract_next_url(pwd_json)
+            if not next_url:
+                note = "password/verify 响应里没有 continue_url，也无法从 page.type 推导下一跳。"
+                _log_oauth_chain_failure(
+                    "missing_next_url_after_password_verify",
+                    current_url=current_url,
+                    resp=pwd_login_resp,
+                    trace=oauth_trace,
+                    note=note,
+                )
+                return _oauth_retry_result(
+                    False,
+                    stage="missing_next_url_after_password_verify",
+                    current_url=current_url,
+                    note=note,
+                    message="密码通过了，但后续跳转地址丢了。",
+                )
+            resp, current_url = _follow_redirect_chain_local(
+                s_log, next_url, proxies, trace=oauth_trace, stage="post_password_verify"
+            )
 
         if current_url.endswith("/email-verification"):
             print(f"\n[{cfg.ts()}] [INFO] 静默登录需要验证码，主动触发发送...")
@@ -1241,10 +1418,13 @@ def retry_manual_review_login(
     if proxy and proxy.startswith("socks5://"):
         proxy = proxy.replace("socks5://", "socks5h://")
     proxies = {"http": proxy, "https": proxy} if proxy else None
+    is_takeover = str(password or "").strip() == "Takeover_NoPassword"
 
     print(f"[{cfg.ts()}] [INFO] 开始尝试为人工复核账号补拿 Token: {mask_email(email)}")
     if proxy:
         print(f"[{cfg.ts()}] [INFO] 本次人工复核自动登录使用代理: {proxy}")
+    if is_takeover:
+        print(f"[{cfg.ts()}] [INFO] [人工复核] 识别到该账号来源于老账号接管流，将走无密码邮箱验证码接管。")
     result = _retry_oauth_login_flow(
         email,
         password,
@@ -1252,6 +1432,7 @@ def retry_manual_review_login(
         proxies=proxies,
         processed_mails=processed_mails,
         record_manual_on_add_phone=False,
+        is_takeover=is_takeover,
     )
     print(
         f"[{cfg.ts()}] [INFO] [人工复核] 自动补拿 Token 流程结束: "
@@ -1271,6 +1452,10 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
     _clear_sentinel_cache()
     s_reg = requests.Session(proxies=proxies, impersonate="chrome110")
     s_reg.timeout = 30
+    is_takeover = False
+    create_account_json: Dict[str, Any] = {}
+    target_continue_url = ""
+    about_you_referer = "https://auth.openai.com/about-you"
 
     if not _skip_net_check():
         try:
@@ -1301,7 +1486,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
         s_reg.get(oauth_reg.auth_url, proxies=proxies, verify=_ssl_verify(), timeout=15)
         did = s_reg.cookies.get("oai-did") or ""
         if not did:
-            print(f"[{cfg.ts()}] [WARNING] 未获取到 oai-did，节点环境可能被关注。")
+            print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）未获取到 oai-did，节点环境可能被关注，请更换IP或节点。")
 
         reg_ctx = {}
 
@@ -1334,40 +1519,26 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
             _log_registration_http_failure("注册环节", signup_resp)
             return None, None
 
-        sentinel_reg = _challenge_token(
-            s_reg, "username_password_create", proxies, use=True, ctx=reg_ctx
-        )
-        pwd_headers = _oai_headers(
-            did,
-            {
-                "Referer": "https://auth.openai.com/create-account/password",
-                "content-type": "application/json",
-            },
-        )
-        if sentinel_reg:
-            pwd_headers["openai-sentinel-token"] = sentinel_reg
+        signup_json = _json_dict(signup_resp)
+        signup_continue_url = _extract_next_url(signup_json)
 
-        pwd_resp = _post_with_retry(
-            s_reg,
-            "https://auth.openai.com/api/accounts/user/register",
-            headers=pwd_headers,
-            json_body={"password": password, "username": email},
-            proxies=proxies,
-        )
+        if "log-in" in str(signup_continue_url or ""):
+            is_takeover = True
+            print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）该邮箱已注册，转入无密码邮箱验证码接管流程。")
 
-        if pwd_resp.status_code != 200:
-            if run_ctx is not None:
-                run_ctx["pwd_blocked"] = True
-            _log_registration_http_failure("密码提交环节", pwd_resp)
-            return None, None
+            takeover_referer = str(signup_continue_url or "").strip()
+            if takeover_referer and not takeover_referer.startswith("http"):
+                takeover_referer = f"https://auth.openai.com{takeover_referer}"
+            if takeover_referer:
+                try:
+                    _, takeover_referer = _follow_redirect_chain_local(
+                        s_reg, takeover_referer, proxies, stage="signup_takeover_entry"
+                    )
+                except Exception:
+                    pass
+            if not takeover_referer:
+                takeover_referer = "https://auth.openai.com/log-in/password"
 
-        reg_json = _json_dict(pwd_resp)
-        need_otp = (
-            "verify" in reg_json.get("continue_url", "")
-            or "otp"  in (reg_json.get("page") or {}).get("type", "")
-        )
-
-        if need_otp:
             if cfg.EMAIL_API_MODE == "luckmail":
                 try:
                     from utils.email_providers.luckmail_service import LuckMailService
@@ -1377,199 +1548,345 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                         proxies=proxies if getattr(cfg, 'USE_PROXY_FOR_EMAIL', True) else None
                     )
                     if not lm_service.check_token_alive(email_jwt):
-                        print(f"[{cfg.ts()}] [ERROR] 邮箱 已失效，放弃当前注册并重试！")
+                        print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）邮箱已失效，无法继续接管。")
                         return None, None
                 except Exception as e:
                     print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
-            otp_url = str(reg_json.get("continue_url") or "").strip()
-            send_otp_url = "https://auth.openai.com/api/accounts/email-otp/send"
-            if otp_url:
-                try:
-                    otp_headers = _oai_headers(
-                        did,
-                        {
-                            "Referer": "https://auth.openai.com/create-account/password",
-                            "content-type": "application/json",
-                        },
-                    )
-                    if sentinel_reg:
-                        otp_headers["openai-sentinel-token"] = sentinel_reg
-                    _post_with_retry(
-                        s_reg,
-                        otp_url if otp_url.startswith("http") else f"https://auth.openai.com{otp_url}",
-                        headers=otp_headers,
-                        json_body={},
-                        proxies=proxies,
-                        timeout=30,
-                    )
-                except Exception as e:
-                    print(f"[{cfg.ts()}] [WARNING] continue_url 触发 OTP 请求异常: {e}")
 
-            print(f"\n[{cfg.ts()}] [INFO] 正在向 {mask_email(email)} 主动请求发送验证码...")
-            try:
-                sentinel_send = _challenge_token(s_reg, "authorize_continue", proxies, ctx=reg_ctx)
-                send_headers = _oai_headers(
-                    did,
-                    {
-                        "Referer": "https://auth.openai.com/create-account/password",
-                        "content-type": "application/json",
-                    },
-                )
-                if sentinel_send:
-                    send_headers["openai-sentinel-token"] = sentinel_send
-                _post_with_retry(
-                    s_reg,
-                    send_otp_url,
-                    headers=send_headers,
-                    json_body={},
-                    proxies=proxies,
-                    timeout=30,
-                )
-            except Exception as e:
-                print(f"[{cfg.ts()}] [WARNING] OTP 初始发送请求异常: {e}")
+            sentinel_takeover_send = _challenge_token(s_reg, "password-verify", proxies, ctx=reg_ctx)
+            takeover_send_headers = _oai_headers(
+                did,
+                {
+                    "Referer": takeover_referer,
+                    "content-type": "application/json",
+                },
+            )
+            if sentinel_takeover_send:
+                takeover_send_headers["openai-sentinel-token"] = sentinel_takeover_send
+            takeover_send_resp = _post_with_retry(
+                s_reg,
+                "https://auth.openai.com/api/accounts/passwordless/send-otp",
+                headers=takeover_send_headers,
+                proxies=proxies,
+                timeout=30,
+            )
+            if takeover_send_resp.status_code != 200:
+                _log_registration_http_failure("老账号接管发信", takeover_send_resp)
+                return None, None
 
-            code = ""
+            login_code = ""
             for resend_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
                 if resend_attempt > 0:
-                    print(f"\n[{cfg.ts()}] [INFO] 正在重试 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
+                    print(f"\n[{cfg.ts()}] [INFO] 老账号接管验证码重试 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
                     try:
-                        sentinel_resend = _challenge_token(
+                        sentinel_takeover_resend = _challenge_token(
                             s_reg, "authorize_continue", proxies, ctx=reg_ctx
                         )
-                        resend_headers = _oai_headers(
+                        takeover_resend_headers = _oai_headers(
                             did,
                             {
-                                "Referer": "https://auth.openai.com/create-account/password",
+                                "Referer": takeover_referer,
                                 "content-type": "application/json",
                             },
                         )
-                        if sentinel_resend:
-                            resend_headers["openai-sentinel-token"] = sentinel_resend
+                        if sentinel_takeover_resend:
+                            takeover_resend_headers["openai-sentinel-token"] = sentinel_takeover_resend
                         _post_with_retry(
                             s_reg,
-                            send_otp_url,
-                            headers=resend_headers,
+                            "https://auth.openai.com/api/accounts/email-otp/resend",
+                            headers=takeover_resend_headers,
                             json_body={},
                             proxies=proxies,
                             timeout=15,
                         )
                         time.sleep(2)
                     except Exception as e:
-                        print(f"[{cfg.ts()}] [WARNING] 重新发送请求异常: {e}")
-                code = get_oai_code(email, jwt=email_jwt, proxies=proxies,
-                                    processed_mail_ids=processed_mails)
-                if code:
+                        print(f"[{cfg.ts()}] [WARNING] 老账号接管重发请求异常: {e}")
+
+                login_code = get_oai_code(
+                    email,
+                    jwt=email_jwt,
+                    proxies=proxies,
+                    processed_mail_ids=processed_mails,
+                )
+                if login_code:
                     break
 
-            if not code:
-                print(f"[{cfg.ts()}] [ERROR] 重试次数上限，丢弃当前 {mask_email(email)} 邮箱。")
+            if not login_code:
+                print(f"[{cfg.ts()}] [ERROR] 老账号接管阶段未收到验证码，放弃当前邮箱。")
                 return None, None
 
-            sentinel_otp = _challenge_token(s_reg, "authorize_continue", proxies, ctx=reg_ctx)
-            val_headers = _oai_headers(
+            sentinel_takeover_validate = _challenge_token(
+                s_reg, "authorize_continue", proxies, ctx=reg_ctx
+            )
+            takeover_validate_headers = _oai_headers(
                 did,
                 {
-                    "Referer": "https://auth.openai.com/email-verification",
+                    "Referer": takeover_referer,
                     "content-type": "application/json",
                 },
             )
-            if sentinel_otp:
-                val_headers["openai-sentinel-token"] = sentinel_otp
+            if sentinel_takeover_validate:
+                takeover_validate_headers["openai-sentinel-token"] = sentinel_takeover_validate
             code_resp = _post_with_retry(
                 s_reg,
                 "https://auth.openai.com/api/accounts/email-otp/validate",
-                headers=val_headers,
-                json_body={"code": code},
+                headers=takeover_validate_headers,
+                json_body={"code": login_code},
                 proxies=proxies,
             )
             if code_resp.status_code != 200:
-                print(f"[{cfg.ts()}] [ERROR] 验证码校验未通过: {code_resp.text}")
+                _log_registration_http_failure("老账号接管 OTP 校验", code_resp)
                 return None, None
 
-        about_you_referer = "https://auth.openai.com/about-you"
-        if need_otp:
-            code_resp_json = _json_dict(code_resp)
-            about_you_url = _extract_next_url(code_resp_json)
-            if about_you_url:
-                print(
-                    f"[{cfg.ts()}] [INFO] 邮箱验证码校验通过，继续推进注册资料页: "
-                    f"{_short_text(about_you_url, 180)}"
-                )
-                _, about_you_referer = _follow_redirect_chain_local(
-                    s_reg,
-                    about_you_url,
-                    proxies,
-                    stage="signup_post_email_otp",
-                )
-                if "code=" in about_you_referer and "state=" in about_you_referer:
-                    print(f"[{cfg.ts()}] [SUCCESS] 邮箱验证后已直接命中授权回调。")
-                    return submit_callback_url(
-                        callback_url=about_you_referer,
-                        expected_state=oauth_reg.state,
-                        code_verifier=oauth_reg.code_verifier,
-                        redirect_uri=oauth_reg.redirect_uri,
-                        proxies=proxies,
-                    ), password
-
-        try:
-            about_you_resp = s_reg.get(
-                about_you_referer,
-                proxies=proxies,
-                verify=_ssl_verify(),
-                timeout=15,
+            password = "Takeover_NoPassword"
+            create_account_json = _json_dict(code_resp)
+            target_continue_url = _extract_next_url(create_account_json)
+        else:
+            sentinel_reg = _challenge_token(
+                s_reg, "username_password_create", proxies, use=True, ctx=reg_ctx
             )
-            about_you_referer = str(getattr(about_you_resp, "url", "") or about_you_referer)
-            if about_you_referer.endswith("/add-phone"):
+            pwd_headers = _oai_headers(
+                did,
+                {
+                    "Referer": "https://auth.openai.com/create-account/password",
+                    "content-type": "application/json",
+                },
+            )
+            if sentinel_reg:
+                pwd_headers["openai-sentinel-token"] = sentinel_reg
+
+            pwd_resp = _post_with_retry(
+                s_reg,
+                "https://auth.openai.com/api/accounts/user/register",
+                headers=pwd_headers,
+                json_body={"password": password, "username": email},
+                proxies=proxies,
+            )
+
+            if pwd_resp.status_code != 200:
                 if run_ctx is not None:
-                    run_ctx["phone_verify"] = True
-                note = "提交账户资料前已命中手机号验证页，无法继续自动化创建账户。"
-                _log_oauth_chain_failure(
-                    "signup_profile_phone_verification",
-                    current_url=about_you_referer,
-                    resp=about_you_resp,
-                    note=note,
-                )
-                _record_manual_login_required(
-                    email,
-                    password,
-                    stage="signup_profile_phone_verification",
-                    current_url=about_you_referer,
-                    note=note,
-                    email_jwt=email_jwt,
-                )
+                    run_ctx["pwd_blocked"] = True
+                _log_registration_http_failure("密码提交环节", pwd_resp)
                 return None, None
-            if getattr(about_you_resp, "status_code", 0) not in (200, 204):
-                print(f"[{cfg.ts()}] [WARNING] 注册资料页预热返回异常: {_response_debug_summary(about_you_resp)}")
-        except Exception as e:
-            print(f"[{cfg.ts()}] [WARNING] 注册资料页预热失败，将直接提交账户资料: {e}")
 
-        user_info = generate_random_user_info()
-        print(f"[{cfg.ts()}] [INFO] 初始化账户信息 "
-              f"(昵称: {user_info['name']}, 生日: {user_info['birthdate']})...")
+            reg_json = _json_dict(pwd_resp)
+            need_otp = (
+                "verify" in reg_json.get("continue_url", "")
+                or "otp"  in (reg_json.get("page") or {}).get("type", "")
+            )
 
-        sentinel_create = _challenge_token(s_reg, "create_account", proxies, use=True, ctx=reg_ctx)
-        create_headers = _oai_headers(
-            did,
-            {
-                "Referer": about_you_referer,
-                "content-type": "application/json",
-            },
-        )
-        if sentinel_create:
-            create_headers["openai-sentinel-token"] = sentinel_create
-        create_account_resp = _post_with_retry(
-            s_reg,
-            "https://auth.openai.com/api/accounts/create_account",
-            headers=create_headers,
-            json_body=user_info,
-            proxies=proxies,
-        )
+            if need_otp:
+                if cfg.EMAIL_API_MODE == "luckmail":
+                    try:
+                        from utils.email_providers.luckmail_service import LuckMailService
+                        print(f"[{cfg.ts()}] [INFO] 正在检测 LuckMail 邮箱（{mask_email(email)}）是否存活...")
+                        lm_service = LuckMailService(
+                            api_key=cfg.LUCKMAIL_API_KEY,
+                            proxies=proxies if getattr(cfg, 'USE_PROXY_FOR_EMAIL', True) else None
+                        )
+                        if not lm_service.check_token_alive(email_jwt):
+                            print(f"[{cfg.ts()}] [ERROR] 邮箱已失效，放弃当前注册并重试！")
+                            return None, None
+                    except Exception as e:
+                        print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
+                otp_url = str(reg_json.get("continue_url") or "").strip()
+                send_otp_url = "https://auth.openai.com/api/accounts/email-otp/send"
+                if otp_url:
+                    try:
+                        otp_headers = _oai_headers(
+                            did,
+                            {
+                                "Referer": "https://auth.openai.com/create-account/password",
+                                "content-type": "application/json",
+                            },
+                        )
+                        if sentinel_reg:
+                            otp_headers["openai-sentinel-token"] = sentinel_reg
+                        _post_with_retry(
+                            s_reg,
+                            otp_url if otp_url.startswith("http") else f"https://auth.openai.com{otp_url}",
+                            headers=otp_headers,
+                            json_body={},
+                            proxies=proxies,
+                            timeout=30,
+                        )
+                    except Exception as e:
+                        print(f"[{cfg.ts()}] [WARNING] continue_url 触发 OTP 请求异常: {e}")
 
-        if create_account_resp.status_code != 200:
-            _log_registration_http_failure("账户创建", create_account_resp)
-            return None, None
+                print(f"\n[{cfg.ts()}] [INFO] 正在向 {mask_email(email)} 主动请求发送验证码...")
+                try:
+                    sentinel_send = _challenge_token(s_reg, "authorize_continue", proxies, ctx=reg_ctx)
+                    send_headers = _oai_headers(
+                        did,
+                        {
+                            "Referer": "https://auth.openai.com/create-account/password",
+                            "content-type": "application/json",
+                        },
+                    )
+                    if sentinel_send:
+                        send_headers["openai-sentinel-token"] = sentinel_send
+                    _post_with_retry(
+                        s_reg,
+                        send_otp_url,
+                        headers=send_headers,
+                        json_body={},
+                        proxies=proxies,
+                        timeout=30,
+                    )
+                except Exception as e:
+                    print(f"[{cfg.ts()}] [WARNING] OTP 初始发送请求异常: {e}")
 
-        create_account_json = _json_dict(create_account_resp)
+                code = ""
+                for resend_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
+                    if resend_attempt > 0:
+                        print(f"\n[{cfg.ts()}] [INFO] 正在重试 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
+                        try:
+                            sentinel_resend = _challenge_token(
+                                s_reg, "authorize_continue", proxies, ctx=reg_ctx
+                            )
+                            resend_headers = _oai_headers(
+                                did,
+                                {
+                                    "Referer": "https://auth.openai.com/create-account/password",
+                                    "content-type": "application/json",
+                                },
+                            )
+                            if sentinel_resend:
+                                resend_headers["openai-sentinel-token"] = sentinel_resend
+                            _post_with_retry(
+                                s_reg,
+                                send_otp_url,
+                                headers=resend_headers,
+                                json_body={},
+                                proxies=proxies,
+                                timeout=15,
+                            )
+                            time.sleep(2)
+                        except Exception as e:
+                            print(f"[{cfg.ts()}] [WARNING] 重新发送请求异常: {e}")
+                    code = get_oai_code(
+                        email,
+                        jwt=email_jwt,
+                        proxies=proxies,
+                        processed_mail_ids=processed_mails,
+                    )
+                    if code:
+                        break
+
+                if not code:
+                    print(f"[{cfg.ts()}] [ERROR] 重试次数上限，丢弃当前 {mask_email(email)} 邮箱。")
+                    return None, None
+
+                sentinel_otp = _challenge_token(s_reg, "authorize_continue", proxies, ctx=reg_ctx)
+                val_headers = _oai_headers(
+                    did,
+                    {
+                        "Referer": "https://auth.openai.com/email-verification",
+                        "content-type": "application/json",
+                    },
+                )
+                if sentinel_otp:
+                    val_headers["openai-sentinel-token"] = sentinel_otp
+                code_resp = _post_with_retry(
+                    s_reg,
+                    "https://auth.openai.com/api/accounts/email-otp/validate",
+                    headers=val_headers,
+                    json_body={"code": code},
+                    proxies=proxies,
+                )
+                if code_resp.status_code != 200:
+                    print(f"[{cfg.ts()}] [ERROR] 验证码校验未通过: {code_resp.text}")
+                    return None, None
+
+            if need_otp:
+                code_resp_json = _json_dict(code_resp)
+                about_you_url = _extract_next_url(code_resp_json)
+                if about_you_url:
+                    print(
+                        f"[{cfg.ts()}] [INFO] 邮箱验证码校验通过，继续推进注册资料页: "
+                        f"{_short_text(about_you_url, 180)}"
+                    )
+                    _, about_you_referer = _follow_redirect_chain_local(
+                        s_reg,
+                        about_you_url,
+                        proxies,
+                        stage="signup_post_email_otp",
+                    )
+                    if "code=" in about_you_referer and "state=" in about_you_referer:
+                        print(f"[{cfg.ts()}] [SUCCESS] 邮箱验证后已直接命中授权回调。")
+                        return submit_callback_url(
+                            callback_url=about_you_referer,
+                            expected_state=oauth_reg.state,
+                            code_verifier=oauth_reg.code_verifier,
+                            redirect_uri=oauth_reg.redirect_uri,
+                            proxies=proxies,
+                        ), password
+
+            try:
+                about_you_resp = s_reg.get(
+                    about_you_referer,
+                    proxies=proxies,
+                    verify=_ssl_verify(),
+                    timeout=15,
+                )
+                about_you_referer = str(getattr(about_you_resp, "url", "") or about_you_referer)
+                if about_you_referer.endswith("/add-phone"):
+                    if run_ctx is not None:
+                        run_ctx["phone_verify"] = True
+                    note = "提交账户资料前已命中手机号验证页，无法继续自动化创建账户。"
+                    _log_oauth_chain_failure(
+                        "signup_profile_phone_verification",
+                        current_url=about_you_referer,
+                        resp=about_you_resp,
+                        note=note,
+                    )
+                    _record_manual_login_required(
+                        email,
+                        password,
+                        stage="signup_profile_phone_verification",
+                        current_url=about_you_referer,
+                        note=note,
+                        email_jwt=email_jwt,
+                    )
+                    return None, None
+                if getattr(about_you_resp, "status_code", 0) not in (200, 204):
+                    print(f"[{cfg.ts()}] [WARNING] 注册资料页预热返回异常: {_response_debug_summary(about_you_resp)}")
+            except Exception as e:
+                print(f"[{cfg.ts()}] [WARNING] 注册资料页预热失败，将直接提交账户资料: {e}")
+
+            user_info = generate_random_user_info()
+            print(
+                f"[{cfg.ts()}] [INFO] 初始化账户信息 "
+                f"(昵称: {user_info['name']}, 生日: {user_info['birthdate']})..."
+            )
+
+            sentinel_create = _challenge_token(s_reg, "create_account", proxies, use=True, ctx=reg_ctx)
+            create_headers = _oai_headers(
+                did,
+                {
+                    "Referer": about_you_referer,
+                    "content-type": "application/json",
+                },
+            )
+            if sentinel_create:
+                create_headers["openai-sentinel-token"] = sentinel_create
+            create_account_resp = _post_with_retry(
+                s_reg,
+                "https://auth.openai.com/api/accounts/create_account",
+                headers=create_headers,
+                json_body=user_info,
+                proxies=proxies,
+            )
+
+            if create_account_resp.status_code != 200:
+                if run_ctx is not None:
+                    run_ctx["signup_blocked"] = True
+                _log_registration_http_failure("账户创建", create_account_resp)
+                return None, None
+
+            create_account_json = _json_dict(create_account_resp)
+            target_continue_url = _extract_next_url(create_account_json)
 
         auth_cookie = s_reg.cookies.get("oai-client-auth-session") or ""
         workspaces  = _parse_workspace_from_auth_cookie(auth_cookie)
@@ -1578,7 +1895,9 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
         print(f"[{cfg.ts()}] [INFO] 基础信息建立完毕，优先沿当前注册会话提取最终凭据...")
         direct_trace = []
         direct_current_url = ""
-        post_create_url = _extract_next_url(create_account_json)
+        post_create_url = str(target_continue_url or _extract_next_url(create_account_json) or "").strip()
+        if post_create_url and not post_create_url.startswith("http"):
+            post_create_url = f"https://auth.openai.com{post_create_url}"
 
         if post_create_url:
             _, direct_current_url = _follow_redirect_chain_local(
@@ -1603,7 +1922,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                 s_reg,
                 oauth_reg,
                 proxies=proxies,
-                referer=direct_current_url or post_create_url or about_you_referer,
+                referer=direct_current_url or post_create_url or about_you_referer or "https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
                 trace=direct_trace,
                 stage="direct_workspace_select",
             )
@@ -1635,6 +1954,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
             proxies=proxies,
             processed_mails=processed_mails,
             record_manual_on_add_phone=True,
+            is_takeover=is_takeover,
         )
         if run_ctx is not None:
             retry_url = str(retry_result.get("current_url") or "")
