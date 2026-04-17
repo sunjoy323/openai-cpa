@@ -128,6 +128,10 @@ clash_proxy_pool:
   api_url: "http://127.0.0.1:9097"
   #true为测速优选，false为随机盲抽。提示：如果A节点一直是最低延迟那么可能每次都是A节点。
   fastest_mode: false
+  # 目标集群实例数量
+  cluster_count: 5
+  # 订阅链接存储
+  sub_url: ""
   # 你机场包含所有节点的策略组名称，带有 Emoji 也没关系
   group_name: "节点选择"
   # Clash 的外部控制鉴权秘钥 (Secret)
@@ -231,6 +235,7 @@ sub2api_mode:
   account_rate_multiplier: 1.0
   account_group_ids: ""
   enable_ws_mode: true
+  test_model: "gpt-5.2"
 
 hero_sms:
   enabled: false
@@ -239,6 +244,7 @@ hero_sms:
   country: 50
   service: dr
   auto_pick_country: false
+  verify_on_register: false
   reuse_phone: true
   max_price: 0.08
   min_balance: 1

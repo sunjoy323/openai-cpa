@@ -663,6 +663,7 @@ def submit_callback_url(
 
     config_obj = {
         "id_token":      id_token,
+        "client_id":     CLIENT_ID,
         "access_token":  access_token,
         "refresh_token": refresh_token,
         "account_id":    account_id,

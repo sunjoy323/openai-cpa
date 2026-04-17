@@ -1141,8 +1141,35 @@ async def update_mailboxes_status(req: UpdateMailboxStatusReq, token: str = Depe
     for email in req.emails:
         try:
             db_manager.update_local_mailbox_status(email, req.status)
+            db_manager.clear_retry_master_status(email)
             success_count += 1
         except Exception as e:
             pass
 
     return {"status": "success", "message": f"成功将 {success_count} 个邮箱状态重置！"}
+
+import utils.integrations.clash_manager as clash_manager
+
+class ClashDeployReq(BaseModel):
+    count: int
+
+class ClashUpdateReq(BaseModel):
+    sub_url: str
+    target: str = "all"
+
+@router.get("/api/clash/status")
+async def get_clash_status(token: str = Depends(verify_token)):
+    res = clash_manager.get_pool_status()
+    if "error" in res:
+        return {"status": "error", "message": res["error"]}
+    return {"status": "success", "data": res}
+
+@router.post("/api/clash/deploy")
+async def post_clash_deploy(req: ClashDeployReq, token: str = Depends(verify_token)):
+    success, msg = clash_manager.deploy_clash_pool(req.count)
+    return {"status": "success" if success else "error", "message": msg}
+
+@router.post("/api/clash/update")
+async def post_clash_update(req: ClashUpdateReq, token: str = Depends(verify_token)):
+    success, msg = clash_manager.patch_and_update(req.sub_url, req.target)
+    return {"status": "success" if success else "error", "message": msg}

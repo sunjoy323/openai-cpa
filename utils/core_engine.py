@@ -765,6 +765,7 @@ def process_sub2api_worker(i: int, total: int, item: dict, client: Any, args: An
 
     if result == "ok":
         print(f"[{ts()}] [SUCCESS] Sub2API测活: {mask_email(name)} 状态健康")
+        client.set_account_status(account_id, disabled=False)
         return True
 
     if result == "quota":

@@ -3,7 +3,7 @@ const { createApp } = Vue;
 createApp({
     data() {
         return {
-            appVersion: 'v10.1.0',
+            appVersion: 'v10.1.5',
             isLoggedIn: !!localStorage.getItem('auth_token'),
             loginPassword: '',
             currentTab: window.location.hash.replace('#', '') || 'console',
@@ -88,6 +88,8 @@ createApp({
                 temporam: false,
                 tmailor_token: false,
                 fvia_token: false,
+                subUrl: false,
+                showMailboxesPlaintext: false,
                 master_rt: false
             },
 
@@ -135,6 +137,14 @@ createApp({
                 isLoading: false
             },
             BUILTIN_CLIENT_ID: "7feada80-d946-4d06-b134-73afa3524fb7",
+            clashPool: {
+                loading: false,
+                subUrl: '',
+                target: 'all',
+                count: 5,
+                instances: [],
+                groups: []
+            },
         };
     },
     mounted() {
@@ -144,7 +154,7 @@ createApp({
         window.addEventListener('hashchange', () => {
             const tab = window.location.hash.replace('#', '');
             if (tab && this.tabs.some(t => t.id === tab)) {
-                this.currentTab = tab;
+                this.switchTab(tab);
             }
         });
         this.timer = setInterval(() => {
@@ -240,6 +250,9 @@ createApp({
             if (this.config && this.config.reg_mode === 'extension') {
                 this.listenToExtension();
             }
+            if (this.currentTab === 'proxy') {
+                this.fetchClashPool();
+            }
         },
         startStatsPolling() {
             if(this.statsTimer) clearTimeout(this.statsTimer);
@@ -302,6 +315,9 @@ createApp({
                         refresh_token: ''
                     };
                 }
+                if (this.config.sub2api_mode.test_model === undefined) {
+                    this.config.sub2api_mode.test_model = 'gpt-5.2';
+                }
                 if (!this.config.fvia) {
                     this.config.fvia = { token: '' };
                 }
@@ -347,6 +363,12 @@ createApp({
                 if(this.config.clash_proxy_pool && Array.isArray(this.config.clash_proxy_pool.blacklist)) {
                     this.blacklistStr = this.config.clash_proxy_pool.blacklist.join('\n');
                 }
+                if (this.config.clash_proxy_pool.cluster_count !== undefined) {
+                    this.clashPool.count = parseInt(this.config.clash_proxy_pool.cluster_count) || 5;
+                }
+                if (this.config.clash_proxy_pool.sub_url !== undefined) {
+                    this.clashPool.subUrl = this.config.clash_proxy_pool.sub_url;
+                }
                 if(Array.isArray(this.config.warp_proxy_list)) {
                     this.warpListStr = this.config.warp_proxy_list.join('\n');
                 }
@@ -359,6 +381,8 @@ createApp({
             try {
                 if(this.config.clash_proxy_pool) {
                     this.config.clash_proxy_pool.blacklist = this.blacklistStr.split('\n').map(s => s.trim()).filter(s => s);
+                    this.config.clash_proxy_pool.cluster_count = parseInt(this.clashPool.count) || 5;
+                    this.config.clash_proxy_pool.sub_url = this.clashPool.subUrl;
                 }
                 this.config.warp_proxy_list = this.warpListStr.split('\n').map(s => s.trim()).filter(s => s);
                 const res = await this.authFetch('/api/config', {
@@ -460,6 +484,9 @@ createApp({
             }
             if (tabId === 'mailboxes') {
                 this.fetchMailboxes();
+            }
+            if (tabId === 'proxy') {
+                this.fetchClashPool();
             }
         },
         async exportSelectedAccounts() {
@@ -2010,6 +2037,80 @@ createApp({
                 }
             } catch (e) {
                 this.showToast("请求异常", "error");
+            }
+        },
+        async fetchClashPool() {
+            this.clashPool.loading = true;
+            try {
+                const res = await this.authFetch('/api/clash/status');
+                const d = await res.json();
+                if (d.status === 'success') {
+                    this.clashPool.instances = d.data.instances;
+                    this.clashPool.groups = d.data.groups;
+                    if (this.clashPool.instances.length > 0) {
+                        this.clashPool.count = this.clashPool.instances.length;
+                    }
+                }
+            } catch (e) {}
+            this.clashPool.loading = false;
+        },
+        async handleClashDeploy() {
+            this.showToast('正在调整实例规模...', 'info');
+            try {
+                const res = await this.authFetch('/api/clash/deploy', {
+                    method: 'POST',
+                    body: JSON.stringify({ count: this.clashPool.count })
+                });
+                const d = await res.json();
+                this.showToast(d.message, d.status);
+                this.fetchClashPool();
+            } catch (e) { this.showToast('网络错误', 'error'); }
+        },
+        async handleClashUpdate() {
+            if (!this.clashPool.subUrl) return this.showToast('请输入订阅链接', 'error');
+            this.clashPool.loading = true;
+            try {
+                const res = await this.authFetch('/api/clash/update', {
+                    method: 'POST',
+                    body: JSON.stringify({ sub_url: this.clashPool.subUrl, target: this.clashPool.target })
+                });
+                const d = await res.json();
+                this.showToast(d.message, d.status);
+                this.fetchClashPool();
+            } catch (e) { this.showToast('网络错误', 'error'); }
+            this.clashPool.loading = false;
+        },
+        fillProxyGroup(name) {
+            if (this.config && this.config.clash_proxy_pool) {
+                this.config.clash_proxy_pool.group_name = name;
+                this.showToast(`已自动填入策略组：${name}`, 'success');
+            }
+        },
+        syncClusterToPool() {
+            if (!this.clashPool.instances || this.clashPool.instances.length === 0) {
+                this.showToast('当前没有运行中的实例', 'warning');
+                return;
+            }
+
+            const generatedList = this.clashPool.instances
+                .filter(ins => ins.status === 'running')
+                .map(ins => {
+                    const idx = ins.name.split('_')[1];
+                    return `http://127.0.0.1:${41000 + parseInt(idx)}`;
+                });
+
+            if (this.config && this.config.clash_proxy_pool) {
+                this.warpListStr = generatedList.join('\n');
+
+                this.config.clash_proxy_pool.pool_mode = true;
+                this.config.clash_proxy_pool.enable = true;
+
+                this.showToast(`✅ 已自动同步 ${generatedList.length} 个端口到独享池`, 'success');
+
+                this.$nextTick(() => {
+                    const el = document.getElementById('proxy-intelligence-pool');
+                    if (el) el.scrollIntoView({ behavior: 'smooth' });
+                });
             }
         },
     }

@@ -221,13 +221,15 @@ services:
     image: wenfxl/wenfxl-codex-manager:latest
     container_name: wenfxl_codex_manager
     ports:
-      - "8899:8000"
+      - "8000:8000"
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      - HOST_PROJECT_PATH=${PWD}
     volumes:
       - ./data:/app/data
-
+      - /var/run/docker.sock:/var/run/docker.sock
   watchtower:
     image: containrrr/watchtower
     container_name: watchtower
@@ -235,6 +237,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     command: --interval 86400 --cleanup
+
 ```
 
 ### Docker deployment steps
@@ -257,6 +260,7 @@ docker compose logs -f
 ```bash
 docker compose down
 ```
+
 ### Local build helper script
 
 If you prefer building from local source, you can use:
@@ -282,6 +286,12 @@ Optional parameters:
 - `--all-proxy URL`
 - `--no-proxy host1,host2`
 
+5. update:
+
+```bash
+docker-compose pull wenfxl/wenfxl-codex-manager:latest
+```
+config directly
 Notes:
 - `./data:/app/data` is used to persist runtime data, local database content, exports, and container-side configuration files.
 - The Docker Web Console is exposed on port `8000` by default.
@@ -365,143 +375,22 @@ If you use server-side concurrent registration and want each worker to use an in
 
 and pair them with corresponding controller APIs. Then fill `warp_proxy_list` and enable `pool_mode: true`.
 
-### 8. Create a Clash proxy pool with a deployment script
+### 8. Deploy a Clash Proxy Cluster via Web Console (Recommended)
 
-You can also create a Clash proxy pool on a server by generating multiple Mihomo containers through a shell script.
+The legacy shell script deployment has been deprecated and replaced by the powerful built directly into the web console. You can now dynamically scale, configure, and route your Mihomo (Clash) containers without ever touching the command line.
 
-#### Step 1: remove the old script if it exists
+#### Step 1: Access the Proxy Settings
+Log in to the Wenfxl Web Console and navigate to the **[Network Proxy]** tab.
 
-```bash
-rm -f /root/run_clash.sh
-```
+#### Step 2: Scale the Cluster
+Locate the **Mihomo Instance Cluster Control** panel. Enter your desired number of container instances (e.g., `5`) and click **[Sync Scale]**. The backend will automatically create and map the Docker containers for you.
+*(Note: Proxy ports are automatically mapped starting from 41001, and API ports from 42001).*
 
-#### Step 2: create the script file
+#### Step 3: Distribute Subscription
+In the **Subscription Update** section, paste your proxy subscription URL and click **[Distribute]**. The system will automatically fetch the nodes, apply necessary patches (enabling LAN and API access), and restart the instances. 
 
-```bash
-nano /root/run_clash.sh
-```
-
-After pasting the script content:
-- press `Ctrl+O`
-- press `Enter`
-- press `Ctrl+X`
-
-#### Step 3: grant execute permission
-
-```bash
-chmod +x /root/run_clash.sh
-```
-
-#### Step 4: run the script
-
-```bash
-/root/run_clash.sh
-```
-
-#### Script example
-
-```bash
-#!/bin/bash
-
-# ================= Configuration =================
-# Mode selection: 1 = single-subscription mode (1 URL distributed to 10 containers)
-#                 2 = multi-subscription mode (10 URLs mapped to 10 containers)
-MODE=1
-
-# If MODE=1, fill this single URL
-SINGLE_URL="https://你的链接"
-
-# If MODE=2, fill up to 10 URLs in order.
-# If fewer URLs are filled, only that many containers will be created.
-URLS=(
- "https://链接1"
- "https://链接2"
- "https://链接3"
- "https://链接4"
- "https://链接5"
- "https://链接6"
- "https://链接7"
- "https://链接8"
- "https://链接9"
- "https://链接10"
-)
-# ================================================
-
-WORK_DIR="/root/clash-pool"
-mkdir -p $WORK_DIR && cd $WORK_DIR
-
-if [ "$MODE" == "1" ]; then
- COUNT=10
-else
- COUNT=${#URLS[@]}
-fi
-
-echo "--- Current mode: $MODE [1:single-subscription, 2:multi-subscription] ---"
-
-cat <<EOF > docker-compose.yml
-version: "3"
-services:
-$(for ((i=1; i<=COUNT; i++)); do
- PROXY_PORT=$((41000 + i))
- API_PORT=$((42000 + i))
- echo " clash_$i:
- image: metacubex/mihomo:latest
- container_name: clash_$i
- restart: always
- volumes:
- - ./config_$i/config.yaml:/root/.config/mihomo/config.yaml
- ports:
- - \"$PROXY_PORT:7890\"
- - \"$API_PORT:9090\""
-done)
-EOF
-
-docker compose down --remove-orphans
-
-if [ "$MODE" == "1" ]; then
- echo "--- Running single-subscription distribution mode ---"
- mkdir -p config_1
- wget -q -U "Clash-meta" -O ./config_1/config.yaml "$SINGLE_URL"
- if [ -s "./config_1/config.yaml" ]; then
-  for ((i=2; i<=COUNT; i++)); do
-   mkdir -p "config_$i"
-   \cp -f "./config_1/config.yaml" "./config_$i/config.yaml"
-  done
- fi
-else
- echo "--- Running multi-subscription download mode ---"
- for ((i=1; i<=COUNT; i++)); do
-  idx=$((i-1))
-  CURRENT_URL=${URLS[$idx]}
-  mkdir -p "config_$i"
-  wget -q -U "Clash-meta" -O "./config_$i/config.yaml" "$CURRENT_URL"
-  echo " -> container $i download complete"
- done
-fi
-
-for ((i=1; i<=COUNT; i++)); do
- CONF="./config_$i/config.yaml"
- if [ -f "$CONF" ]; then
-  grep -q "allow-lan:" "$CONF" && sed -i 's/allow-lan: .*/allow-lan: true/g' "$CONF" || echo "allow-lan: true" >> "$CONF"
-  grep -q "external-controller:" "$CONF" && sed -i 's/external-controller: .*/external-controller: 0.0.0.0:9090/g' "$CONF" || echo "external-controller: 0.0.0.0:9090" >> "$CONF"
- fi
-done
-
-docker compose up -d
-
-echo ""
-echo "=========================================="
-echo " Copy the following into your script config: "
-echo "=========================================="
-echo "warp_proxy_list:"
-for ((i=1; i<=COUNT; i++)); do
- echo " - \"http://127.0.0.1:$((41000 + i))\""
-done
-echo "=========================================="
-echo ""
-
-echo "--- Deployment completed! Started $COUNT containers ---"
-```
+#### Step 4: One-Click Pool Sync
+Click the purple **[🔗 Sync to Exclusive Pool]** button at the top of the panel. This will automatically calculate the internal routing addresses of your new cluster and link them directly to the smart proxy pool for load balancing.
 
 ## Output Files
 
