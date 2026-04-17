@@ -564,6 +564,8 @@ async def manual_review_account_action(data: dict, token: str = Depends(verify_t
     account = db_manager.get_manual_review_account(email)
     if not account:
         return {"status": "error", "message": f"未找到 {email} 的人工复核记录。"}
+    if engine.is_running():
+        return {"status": "warning", "message": "当前主任务仍在运行，请先停止主任务后再执行人工复核自动补拿 Token。"}
 
     masked_email = register_service.mask_email(email)
     print(f"[{core_engine.ts()}] [INFO] {'=' * 24} 人工复核自动补拿 Token 开始 {'=' * 24}")
@@ -579,6 +581,19 @@ async def manual_review_account_action(data: dict, token: str = Depends(verify_t
         print(f"[{core_engine.ts()}] [INFO] [人工复核] 配置重载完成，准备进入自动登录流程。")
     except Exception as e:
         print(f"[{core_engine.ts()}] [WARNING] 人工复核动作前重载配置失败，将继续使用当前配置: {e}")
+
+    had_global_stop = bool(
+        getattr(core_engine.cfg, "GLOBAL_STOP", False)
+        or getattr(register_service.cfg, "GLOBAL_STOP", False)
+    )
+    if had_global_stop:
+        print(f"[{core_engine.ts()}] [WARNING] [人工复核] 检测到上次停止任务遗留的 GLOBAL_STOP 标记，已自动解除，避免误伤本次补拿流程。")
+    core_engine.cfg.GLOBAL_STOP = False
+    register_service.cfg.GLOBAL_STOP = False
+    if hasattr(core_engine.cfg, "POOL_EXHAUSTED"):
+        core_engine.cfg.POOL_EXHAUSTED = False
+    if hasattr(register_service.cfg, "POOL_EXHAUSTED"):
+        register_service.cfg.POOL_EXHAUSTED = False
 
     proxy = getattr(core_engine.cfg, "DEFAULT_PROXY", "") or None
     if proxy:
