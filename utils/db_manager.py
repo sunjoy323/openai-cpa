@@ -289,12 +289,20 @@ def get_and_lock_unused_local_mailbox() -> dict:
     try:
         with get_db_conn(as_dict=True) as conn:
             c = get_cursor(conn, as_dict=True)
+
+            filter_sql = """
+                SELECT * FROM local_mailboxes 
+                WHERE status = 0 
+                AND email NOT IN (SELECT email FROM accounts) 
+                ORDER BY id ASC LIMIT 1
+            """
+
             if DB_TYPE == "mysql":
                 execute_sql(c, "START TRANSACTION")
-                execute_sql(c, "SELECT * FROM local_mailboxes WHERE status = 0 ORDER BY id ASC LIMIT 1 FOR UPDATE")
+                execute_sql(c, filter_sql + " FOR UPDATE")
             else:
                 execute_sql(c, "BEGIN EXCLUSIVE")
-                execute_sql(c, "SELECT * FROM local_mailboxes WHERE status = 0 ORDER BY id ASC LIMIT 1")
+                execute_sql(c, filter_sql)
 
             row = c.fetchone()
             if row:

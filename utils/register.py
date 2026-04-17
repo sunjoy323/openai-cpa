@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from curl_cffi import requests
 from utils import config as cfg
-from utils.email_providers.mail_service import get_email_and_token, get_oai_code, mask_email
+from utils.email_providers.mail_service import get_email_and_token, get_oai_code, mask_email, record_ms_snapshot
 from utils.integrations.hero_sms import _try_verify_phone_via_hero_sms
 from utils.auth_core import generate_payload
 
@@ -298,6 +298,7 @@ def generate_oauth_url(
         "id_token_add_organizations": "true",
         "codex_cli_simplified_flow": "true",
     }
+
     return OAuthStart(
         auth_url=f"{AUTH_URL}?{urllib.parse.urlencode(params)}",
         state=state,
@@ -490,7 +491,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                         is_takeover = True
                         print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）该邮箱已注册！准备走【无密码邮箱验证码】接管登录...")
                         login_ctx = reg_ctx.copy() if reg_ctx else {}
-                        sentinel_login = generate_payload(did=did, flow="password_verify", proxy=proxy, user_agent=current_ua,
+                        sentinel_login = generate_payload(did=did, flow="authorize_continue", proxy=proxy, user_agent=current_ua,
                                                           impersonate="chrome110", ctx=login_ctx)
                         login_send_headers = _oai_headers(did, {
                             "Referer": "https://auth.openai.com/log-in/password",
@@ -512,6 +513,9 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             except Exception as e:
                                 print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
 
+                        if cfg.EMAIL_API_MODE == "local_microsoft":
+                            record_ms_snapshot(email, jwt=email_jwt, proxies=proxies)
+
                         print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）老帐号触发初次发信...")
                         sentinel_login_resp =_post_with_retry(
                             s_reg,
@@ -527,12 +531,14 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                         for resend_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
                             if getattr(cfg, 'GLOBAL_STOP', False): return None, None
                             if resend_attempt > 0:
+                                if cfg.EMAIL_API_MODE == "local_microsoft":
+                                    record_ms_snapshot(email, jwt=email_jwt, proxies=proxies)
                                 print(f"\n[{cfg.ts()}] [INFO] 未收到登录验证码正在重试 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
                                 try:
                                     sentinel_resend = generate_payload(did=did, flow="authorize_continue", proxy=proxy,
                                                                        user_agent=current_ua, impersonate="chrome110", ctx=login_ctx)
                                     resend_headers = _oai_headers(did, {
-                                        "Referer": "https://auth.openai.com/create-account/password",
+                                        "Referer": "https://auth.openai.com/email-verification",
                                         "content-type": "application/json"
                                     })
                                     if sentinel_resend:
@@ -577,7 +583,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）接管验证通过！")
                             password = "Takeover_NoPassword"
                         else:
-                            print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）接管验证码未通过: {code_resp.status_code}")
+                            print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）接管验证码未通过: {code_resp.status_code}{code_resp.json()}")
                             return None, None
 
                         code_url = str(code_resp.json().get("continue_url") or "").strip()
@@ -673,6 +679,9 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             except Exception as e:
                                 print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
 
+                        if cfg.EMAIL_API_MODE == "local_microsoft":
+                            record_ms_snapshot(email, jwt=email_jwt, proxies=proxies)
+
                         print(f"\n[{cfg.ts()}] [INFO] 正在向 {mask_email(email)} 主动请求发送验证码...")
                         send_otp_url = "https://auth.openai.com/api/accounts/email-otp/send"
 
@@ -699,12 +708,14 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                         for resend_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
                             if getattr(cfg, 'GLOBAL_STOP', False): return None, None
                             if resend_attempt > 0:
+                                if cfg.EMAIL_API_MODE == "local_microsoft":
+                                    record_ms_snapshot(email, jwt=email_jwt, proxies=proxies)
                                 print(f"\n[{cfg.ts()}] [INFO] 正在重试 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
                                 try:
                                     sentinel_resend = generate_payload(did=did, flow="authorize_continue", proxy=proxy,
                                                                        user_agent=current_ua, impersonate="chrome110", ctx=reg_ctx)
                                     resend_headers = _oai_headers(did, {
-                                        "Referer": "https://auth.openai.com/create-account/password",
+                                        "Referer": "https://auth.openai.com/email-verification",
                                         "content-type": "application/json"
                                     })
                                     if sentinel_resend:
@@ -712,7 +723,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
 
                                     _post_with_retry(
                                         s_reg,
-                                        send_otp_url,
+                                        "https://auth.openai.com/api/accounts/email-otp/resend",
                                         headers=resend_headers,
                                         json_body={}, proxies=proxies, timeout=15,
                                     )
@@ -886,6 +897,9 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                     if oauth_attempt == 1:
                         print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）首次遇到 add-phone 风控，正在重试...")
                     s_log = requests.Session(proxies=proxies, impersonate="chrome110")
+                    s_log.headers.update({"Connection": "close"})
+                    s_log.timeout = 30
+                    active_sessions.append(s_log)
                     oauth_log = generate_oauth_url()
 
                     resp, current_url = _follow_redirect_chain_local(s_log, oauth_log.auth_url, proxies)
@@ -927,10 +941,10 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                         return None, None
 
                     if is_takeover:
-                        log_send_headers = generate_payload(did=log_did, flow="password-verify", proxy=proxy, user_agent=current_ua,
+                        log_send_headers = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy, user_agent=current_ua,
                                                           impersonate="chrome110", ctx=log_ctx)
                         login_send_headers = _oai_headers(log_did, {
-                            "Referer": "https://auth.openai.com/log-in/password",
+                            "Referer": "https://auth.openai.com/email-verification",
                             "content-type": "application/json",
                         })
                         if log_send_headers: login_send_headers["openai-sentinel-token"] = log_send_headers
@@ -947,6 +961,8 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                                     return None, None
                             except Exception as e:
                                 print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
+                        if cfg.EMAIL_API_MODE == "local_microsoft":
+                            record_ms_snapshot(email, jwt=email_jwt, proxies=proxies)
 
                         print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）老帐号OAuth无密码登录发信...")
                         sentinel_login_resp =_post_with_retry(
@@ -963,12 +979,14 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                         for login_code_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
                             if getattr(cfg, 'GLOBAL_STOP', False): return None, None
                             if login_code_attempt > 0:
+                                if cfg.EMAIL_API_MODE == "local_microsoft":
+                                    record_ms_snapshot(email, jwt=email_jwt, proxies=proxies)
                                 print(f"\n[{cfg.ts()}] [INFO] 老帐号OAuth 阶段未收到验证码正在重试 {login_code_attempt}/{cfg.MAX_OTP_RETRIES}...")
                                 try:
                                     login_code_resend = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy,
                                                                        user_agent=current_ua, impersonate="chrome110", ctx=log_ctx)
                                     resend_headers = _oai_headers(log_did, {
-                                        "Referer": "https://auth.openai.com/create-account/password",
+                                        "Referer": "https://auth.openai.com/email-verification",
                                         "content-type": "application/json"
                                     })
                                     if login_code_resend:
@@ -1012,7 +1030,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）老帐号OAuth 阶段验证码通过！")
                             password = "Takeover_NoPassword"
                         else:
-                            print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）老帐号OAuth 阶段验证码未通过: {login_code_resp.status_code}{login_code_resp.json()}")
+                            print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）老帐号OAuth 阶段验证码未通过，账号异常: {login_code_resp.status_code}")
                             return None, None
 
                         login_code_url = str(login_code_resp.json().get("continue_url") or "").strip()
@@ -1094,7 +1112,8 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                                     print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
 
                             print(f"\n[{cfg.ts()}] [INFO] （{mask_email(email)}）静默登录需要验证码，主动触发发送...")
-
+                            if cfg.EMAIL_API_MODE == "local_microsoft":
+                                record_ms_snapshot(email, jwt=email_jwt, proxies=proxies)
                             try:
                                 sentinel_log_send = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy,
                                                                      user_agent=current_ua, impersonate="chrome110", ctx=log_ctx)
@@ -1118,20 +1137,22 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             for resend_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
                                 if getattr(cfg, 'GLOBAL_STOP', False): return None, None
                                 if resend_attempt > 0:
+                                    if cfg.EMAIL_API_MODE == "local_microsoft":
+                                        record_ms_snapshot(email, jwt=email_jwt, proxies=proxies)
                                     print(f"\n[{cfg.ts()}] [INFO] （{mask_email(email)}）正在重试 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
                                     try:
                                         sentinel_log_resend = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy,
                                                                                user_agent=current_ua, impersonate="chrome110",
                                                                                ctx=log_ctx)
                                         log_resend_headers = _oai_headers(log_did, {
-                                            "Referer": current_url, "content-type": "application/json"
+                                            "Referer": "https://auth.openai.com/email-verification", "content-type": "application/json"
                                         })
                                         if sentinel_log_resend:
                                             log_resend_headers["openai-sentinel-token"] = sentinel_log_resend
 
                                         _post_with_retry(
                                             s_log,
-                                            "https://auth.openai.com/api/accounts/email-otp/send",
+                                            "https://auth.openai.com/api/accounts/email-otp/resend",
                                             headers=log_resend_headers,
                                             json_body={}, proxies=proxies, timeout=15,
                                         )
@@ -1151,7 +1172,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             sentinel_otp2 = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy, user_agent=current_ua,
                                                              impersonate="chrome110", ctx=log_ctx)
                             val2_headers = _oai_headers(log_did, {
-                                "Referer": current_url,
+                                "Referer": "https://auth.openai.com/email-verification",
                                 "content-type": "application/json",
                             })
                             if sentinel_otp2:
