@@ -992,7 +992,7 @@ def normal_main_loop(args, stop_event: threading.Event, executor=None):
             print(f"\n[{ts()}] [SUCCESS] 已达到目标注册数量 ({target_count})，任务圆满结束！")
             break
 
-        if args.once:
+        if getattr(args, 'once', False):
             break
 
         wait_time = random.randint(sleep_min, sleep_max)
@@ -1524,6 +1524,10 @@ class RegEngine:
     def _run_normal_in_thread(self, args):
         try:
             normal_main_loop(args, self.thread_stop_event, executor=self._executor)
+        except Exception as e:
+            print(f"\n[{ts()}] [CRITICAL] 引擎主线程发生致命崩溃: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             self._finalize_thread_run()
 
