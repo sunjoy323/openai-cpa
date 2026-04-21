@@ -55,6 +55,9 @@ local_microsoft:
   master_email: ""
   client_id: ""
   refresh_token: ""
+  suffix_mode: "fixed"
+  suffix_len_min: 8
+  suffix_len_max: 8
   pool_fission: false
 
 # [模式 "freemail" 专属]
@@ -107,6 +110,17 @@ tmailor:
 # [FviaInboxes 配置]
 fvia:
   token: ''
+
+# Gmail OAuth 裂变配置
+gmail_oauth_mode:
+  master_email: ""           # Gmail 主号 (需已完成 credentials.json 授权)
+  fission_enable: false      # 是否开启 Gmail 裂变
+  fission_mode: "suffix"     # 裂变模式: suffix、dot
+  # 后缀生成配置 (当 fission_mode 为 suffix 时生效)
+  suffix_mode: "mystic"      # fixed (固定长度) / range (随机范围) / mystic (高拟真词库)
+  suffix_len_min: 8
+  suffix_len_max: 12
+
 # [代理配置]
 # openai注册时代理地址，例子：http://127.0.0.1:7897。如果是国外服务器此项可以不填
 default_proxy: ""
@@ -159,6 +173,23 @@ clash_proxy_pool:
     - "China"
     - "回国"
 
+raw_proxy_pool:
+  # 独立于 Clash 的批量代理池；启用后优先使用这里的代理列表
+  # 支持 HTTP / HTTPS / SOCKS5 显式协议；未写协议时默认按 socks5h 解析
+  enable: false
+  proxy_list:
+    # 支持以下格式：
+    # - http://user:pass@host:8080
+    # - https://user:pass@host:8443
+    # - socks5://user:pass@host:1080
+    # - socks5h://user:pass@host:1080
+    # - host:port
+    # - host:port:user:pass
+    # - user:pass@host:port
+    - "http://user:pass@127.0.0.1:8080"
+    - "socks5://user:pass@127.0.0.1:1080"
+    - "127.0.0.1:1081:user:pass"
+
 warp_proxy_list:
   - "http://127.0.0.1:41001"
   - "http://127.0.0.1:41002"
@@ -185,6 +216,9 @@ enable_email_masking: true
 #注册后等待多少秒在去拿tokens,默认是5-15秒之内
 login_delay_min: 20
 login_delay_max: 45
+
+#常规模式是否保存仅注册账号，用于后续手动登录或者其他作用
+retain_reg_only: false
 
 # CPA 模式专属配置
 cpa_mode:
@@ -214,6 +248,8 @@ cpa_mode:
   check_interval_minutes: 60
   #并发线程数配置，默认 10 线程
   threads: 10
+  #是否保存仅注册账号，用于后续手动登录或者其他作用
+  retain_reg_only: false
 
 # SUB2APIA配置 参数含义跟CPA相同
 sub2api_mode:
@@ -236,6 +272,9 @@ sub2api_mode:
   account_group_ids: ""
   enable_ws_mode: true
   test_model: "gpt-5.2"
+  default_proxy: ""
+  #是否保存仅注册账号，用于后续手动登录或者其他作用
+  retain_reg_only: false
 
 hero_sms:
   enabled: false
@@ -267,14 +306,27 @@ tg_bot:
   mask_email: false
   mask_password: false
 
+# 数据库适配，默认为本地sqlite
+database:
+  type: "sqlite"  # 可选值: "sqlite" 或 "mysql"
+  mysql:
+    host: "127.0.0.1"
+    port: 3306
+    user: "root"
+    password: ""
+    db_name: "wenfxl_manager"
+
 # WEB端密码
 web_password: admin
 #CF账号
 cf_api_email: 
 #CF KEY
 cf_api_key:
-
+max_log_lines: "500"
 #集群总控
 cluster_node_name: "NODE-1"
 cluster_master_url: ""
 cluster_secret: "wenfxl666"
+
+# 是否放弃强行变道走无密码OTP
+disable_forced_takeover: true

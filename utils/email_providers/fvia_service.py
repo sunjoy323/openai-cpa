@@ -39,3 +39,19 @@ class FviaMailService:
             return res.json().get("result", []) if res.status_code == 200 else []
         except:
             return []
+
+    def get_message_body(self, email_address: str, msg_id: str) -> str:
+        user, dom = email_address.split("@")
+        url = f"{self.base_url}/message?username={user}&domain={dom}&id={msg_id}"
+        try:
+            res = self.session.get(url, headers=self.headers, timeout=10)
+            if res.status_code == 200:
+                try:
+                    data = res.json()
+                    if isinstance(data, str): return data
+                    if isinstance(data, dict): return data.get("body", data.get("html", res.text))
+                except:
+                    return res.text
+        except Exception as e:
+            pass
+        return ""

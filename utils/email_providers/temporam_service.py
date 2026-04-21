@@ -110,3 +110,38 @@ class TemporamService:
             if "timeout" not in str(e).lower():
                 print(f"[{cfg.ts()}] [ERROR] Temporam API 网络请求异常: {e}")
             return []
+
+    def get_messages_body(self, id: str) -> list:
+        cookies = self._get_cookies_dict()
+        if not cookies:
+            print(f"[{cfg.ts()}] [DEBUG] Temporam Cookie 解析结果为空！请检查前端是否成功传值。")
+            return []
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": TEMPORAM_URL,
+            "Accept": "application/json"
+        }
+        try:
+            resp = requests.get(
+                f"https://www.temporam.com/api/emails/{id}",
+                cookies=cookies,
+                headers=headers,
+                proxies=self.req_proxies,
+                impersonate="chrome110",
+                timeout=10
+            )
+            if resp.status_code == 200:
+                try:
+                    return resp.json()
+                except Exception as e:
+                    print(f"[{cfg.ts()}] [ERROR] Temporam JSON 解析失败: {e}，返回的可能不是标准JSON。")
+                    return []
+            elif resp.status_code in [401, 403]:
+                print(f"[{cfg.ts()}] [WARNING] Temporam Cookie 已过期或被拒绝(HTTP {resp.status_code})，请前往面板重新获取并保存。")
+            return []
+
+        except Exception as e:
+            if "timeout" not in str(e).lower():
+                print(f"[{cfg.ts()}] [ERROR] Temporam API 网络请求异常: {e}")
+            return []
+

@@ -23,9 +23,9 @@ jobs:
           if [[ $GITHUB_REF != refs/tags/* ]]; then
             TAG_NAME="latest"
           fi
-          
+
           ZIP_NAME="Wenfxl-Codex-Manager-${TAG_NAME}.zip"
-          
+
           zip -r $ZIP_NAME . \
             -x "*.git*" \
             -x "*.github*" \
@@ -36,7 +36,7 @@ jobs:
             -x "venv/*" \
             -x ".idea/*" \
             -x ".vscode/*"
-            
+
           echo "ZIP_FILE=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: 发布到 GitHub Releases

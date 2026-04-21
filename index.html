@@ -53,7 +53,6 @@
                 </div>
             </transition-group>
         </div>
-
         <div v-if="confirmModal.show" class="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm transition-opacity p-4">
             <div class="bg-white rounded-2xl shadow-2xl p-6 md:p-8 w-full max-w-md transform transition-all scale-100 border border-slate-100">
                 <h3 class="text-lg md:text-xl font-extrabold text-slate-800 mb-4 flex items-center gap-2">
@@ -85,6 +84,9 @@
                 </div>
                 <button @click="handleLogin" class="w-full bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-bold py-3.5 px-4 rounded-xl text-sm md:text-base focus:outline-none shadow-lg shadow-indigo-500/30 transform active:scale-[0.98] transition-all">
                     安全登录
+                </button>
+                <button @click="toggleTheme" class="w-full mt-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 px-4 rounded-xl text-sm md:text-base border border-slate-200 transition-all active:scale-[0.98]">
+                    {{ isDarkMode ? '☀️ 日间模式' : '🌙 护眼模式' }}
                 </button>
                 <div class="text-center mt-6">
                     <span class="text-[11px] md:text-xs text-slate-400 font-mono tracking-widest font-semibold">{{ appVersion }}</span>
@@ -133,71 +135,78 @@
 
             <main class="flex-1 flex flex-col min-w-0 overflow-hidden relative">
                 <header class="bg-white/70 backdrop-blur-2xl border-b border-slate-200/60 text-slate-800 p-3 md:p-4 shrink-0 shadow-[0_4px_20px_-10px_rgba(0,0,0,0.05)] z-30 relative">
-                    <div class="w-full xl:max-w-[85%] mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-4 md:gap-0">
-                        <div class="flex items-center justify-between md:justify-start gap-4 md:gap-6 w-full md:w-auto">
+                    <div class="w-full xl:max-w-[85%] mx-auto flex flex-wrap 2xl:flex-nowrap items-center justify-between gap-4 md:gap-5">
+                        <div class="flex items-center justify-between md:justify-start gap-4 md:gap-6 w-full 2xl:w-auto flex-1 min-w-[280px]">
                             <div class="bg-indigo-50/80 text-indigo-700 px-3 py-1.5 md:px-4 md:py-2 rounded-lg text-[11px] md:text-sm font-bold tracking-wide border border-indigo-100/80 truncate max-w-[60%] md:max-w-none shadow-sm flex items-center">
                                 模式: {{ stats.mode }} <span class="hidden sm:inline opacity-30 mx-2">|</span> <span class="hidden sm:inline text-slate-500">成功</span> <span class="font-black ml-1 text-indigo-600">{{stats.success}}/{{stats.target}}</span> <span class="hidden lg:inline opacity-30 mx-2">|</span> <span class="hidden lg:inline text-slate-500">总 {{stats.total}}</span>
                             </div>
                             <div class="flex items-center gap-3">
                                 <div class="text-sky-500 font-black text-xs md:text-sm">{{stats.progress_pct}}</div>
-                                <div class="hidden md:block w-24 lg:w-64 h-2 md:h-2.5 bg-slate-100 rounded-full overflow-hidden shrink-0 shadow-inner border border-slate-200/60">
+                                <div class="hidden md:block w-24 lg:w-48 xl:w-64 h-2 md:h-2.5 bg-slate-100 rounded-full overflow-hidden shrink-0 shadow-inner border border-slate-200/60">
                                     <div class="h-full bg-sky-400 progress-bar-inner shadow-[0_0_8px_rgba(56,189,248,0.6)] rounded-full transition-all duration-500" :style="{ width: stats.progress_pct }"></div>
                                 </div>
                             </div>
                         </div>
 
-
-                        <div v-if="config" class="w-full md:w-auto">
-                            <div class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
-                                <span class="text-[10px] md:text-xs font-black text-slate-400 uppercase tracking-widest ml-1 sm:hidden">运行模式切换</span>
-                                <div class="bg-slate-100 p-1 rounded-xl flex w-full sm:w-64 shadow-inner border border-slate-200">
-                                    <button @click="changeRegMode('protocol')"
-                                            :class="['flex-1 py-2 px-3 rounded-lg text-xs md:text-sm font-bold transition-all',
-                                                     config.reg_mode === 'protocol' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700']">
-                                        协议
-                                    </button>
-                                    <button @click="changeRegMode('extension')"
-                                            :class="['flex-1 py-2 px-3 rounded-lg text-xs md:text-sm font-bold transition-all',
-                                                     config.reg_mode === 'extension' ? 'bg-white text-green-600 shadow-sm' : 'text-slate-500 hover:text-slate-700']">
-                                        古法
-                                    </button>
+                        <div class="w-full 2xl:w-auto flex flex-col sm:flex-row items-start sm:items-center justify-start 2xl:justify-end gap-3 md:gap-5 shrink-0 mt-1 sm:mt-0">
+                            <div v-if="config" class="w-full sm:w-auto shrink-0">
+                                <div class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                                    <span class="text-[10px] md:text-xs font-black text-slate-400 uppercase tracking-widest ml-1 sm:hidden">运行模式切换</span>
+                                    <div class="bg-slate-100 p-1 rounded-xl flex w-full sm:w-56 shadow-inner border border-slate-200 shrink-0">
+                                        <button @click="changeRegMode('protocol')"
+                                                :class="['flex-1 py-1.5 md:py-2 px-2 md:px-3 rounded-lg text-xs md:text-sm font-bold transition-all whitespace-nowrap',
+                                                         config.reg_mode === 'protocol' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700']">
+                                            协议
+                                        </button>
+                                        <button @click="changeRegMode('extension')"
+                                                :class="['flex-1 py-1.5 md:py-2 px-2 md:px-3 rounded-lg text-xs md:text-sm font-bold transition-all whitespace-nowrap',
+                                                         config.reg_mode === 'extension' ? 'bg-white text-green-600 shadow-sm' : 'text-slate-500 hover:text-slate-700']">
+                                            古法
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
 
-                        <div class="flex items-center justify-between md:justify-end gap-3 md:gap-4 w-full md:w-auto">
-                            <span v-if="isRunning" class="flex items-center gap-2 text-emerald-600 text-[11px] md:text-sm font-bold bg-white px-3 md:px-4 py-1.5 rounded-full border border-slate-200 shadow-sm">
-                                <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(16,185,129,0.8)]"></span> 运行中
-                            </span>
-                            <span v-else class="flex items-center gap-2 text-slate-500 text-[11px] md:text-sm font-bold bg-white px-3 md:px-4 py-1.5 rounded-full border border-slate-200 shadow-sm">
-                                <span class="w-2 h-2 bg-slate-400 rounded-full"></span> 已停止
-                            </span>
-
-                            <button @click="toggleSystem"
-                                    class="px-5 py-2 md:px-6 md:py-2.5 rounded-xl font-black text-xs md:text-sm text-white shadow-lg transition-all active:scale-95 shrink-0"
-                                    :class="isRunning ? 'bg-rose-500 hover:bg-rose-600 shadow-rose-500/30' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/30'">
-                                {{ isRunning ? '⏹️ 停止' : '🚀 启动' }}
-                            </button>
+                            <div class="flex items-center justify-between sm:justify-start gap-2 md:gap-4 w-full sm:w-auto shrink-0">
+                                <button @click="toggleTheme" class="px-3 py-1.5 md:px-5 md:py-2.5 rounded-xl font-bold text-xs md:text-sm border transition-all active:scale-95 shrink-0 bg-white text-slate-700 border-slate-200 hover:bg-slate-50 shadow-sm flex items-center justify-center">
+                                    <span class="sm:hidden">{{ isDarkMode ? '☀️' : '🌙' }}</span>
+                                    <span class="hidden sm:inline">{{ isDarkMode ? '☀️ 日间' : '🌙 护眼' }}</span>
+                                </button>
+                                <span v-if="isRunning" class="flex items-center gap-1.5 md:gap-2 text-emerald-600 text-[11px] md:text-sm font-bold bg-white px-2.5 py-1.5 md:px-4 md:py-1.5 rounded-full border border-slate-200 shadow-sm shrink-0 whitespace-nowrap">
+                                    <span class="w-1.5 h-1.5 md:w-2 md:h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_5px_rgba(16,185,129,0.8)]"></span>
+                                    <span class="hidden sm:inline">运行中</span><span class="sm:hidden">运行</span>
+                                </span>
+                                <span v-else class="flex items-center gap-1.5 md:gap-2 text-slate-500 text-[11px] md:text-sm font-bold bg-white px-2.5 py-1.5 md:px-4 md:py-1.5 rounded-full border border-slate-200 shadow-sm shrink-0 whitespace-nowrap">
+                                    <span class="w-1.5 h-1.5 md:w-2 md:h-2 bg-slate-400 rounded-full"></span>
+                                    <span class="hidden sm:inline">已停止</span><span class="sm:hidden">停止</span>
+                                </span>
+                                <button @click="toggleSystem"
+                                        class="px-4 py-1.5 md:px-6 md:py-2.5 rounded-xl font-black text-xs md:text-sm text-white shadow-lg transition-all active:scale-95 shrink-0 whitespace-nowrap flex items-center gap-1"
+                                        :class="isRunning ? 'bg-rose-500 hover:bg-rose-600 shadow-rose-500/30' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/30'">
+                                    <span>{{ isRunning ? '⏹️' : '🚀' }}</span>
+                                    <span>{{ isRunning ? '停止' : '启动' }}</span>
+                                </button>
+                            </div>
 
                         </div>
                     </div>
 
-                    <div class="w-full xl:max-w-[85%] mx-auto mt-4 md:mt-5 text-[10px] md:text-[12px] font-mono tracking-wide overflow-x-auto whitespace-nowrap hide-scrollbar flex items-center gap-3">
-                        <span class="text-slate-500 font-bold">成功率 <span class="text-sky-500 font-black ml-0.5">{{stats.success_rate}}</span></span>
-                        <span class="text-slate-300">•</span>
-                        <span class="text-slate-500 font-bold">成功 <span class="text-emerald-500 font-black ml-0.5">{{stats.success}}/{{stats.target}}</span></span>
-                        <span class="text-slate-300">•</span>
-                        <span class="text-slate-500 font-bold">失败 <span class="text-rose-500 font-black ml-0.5">{{stats.failed}}</span></span>
-                        <span class="text-slate-300">•</span>
-                        <span class="text-slate-500 font-bold">风控拦截 <span class="text-amber-500 font-black ml-0.5">{{stats.retries}}</span></span>
-                        <span class="text-slate-300">•</span>
-                        <span class="text-slate-500 font-bold">密码受阻 <span class="text-orange-500 font-black ml-0.5">{{stats.pwd_blocked || 0}}</span></span>
-                        <span class="text-slate-300">•</span>
-                        <span class="text-slate-500 font-bold">出现手机 <span class="text-purple-500 font-black ml-0.5">{{stats.phone_verify || 0}}</span></span>
-                        <span class="text-slate-300">•</span>
-                        <span class="text-slate-500 font-bold">总耗时 <span class="text-slate-800 font-black ml-0.5">{{stats.elapsed}}</span></span>
-                        <span class="text-slate-300">•</span>
-                        <span class="text-slate-500 font-bold">平均 <span class="text-slate-800 font-black ml-0.5">{{stats.avg_time}}</span></span>
+                    <div class="w-full xl:max-w-[85%] mx-auto mt-4 md:mt-5 text-[10px] md:text-[12px] font-mono tracking-wide flex flex-wrap items-center gap-x-3 gap-y-2">
+                        <span class="text-slate-500 font-bold whitespace-nowrap">成功率 <span class="text-sky-500 font-black ml-0.5">{{stats.success_rate}}</span></span>
+                        <span class="text-slate-300 hidden sm:inline">•</span>
+                        <span class="text-slate-500 font-bold whitespace-nowrap">成功 <span class="text-emerald-500 font-black ml-0.5">{{stats.success}}/{{stats.target}}</span></span>
+                        <span class="text-slate-300 hidden sm:inline">•</span>
+                        <span class="text-slate-500 font-bold whitespace-nowrap">失败 <span class="text-rose-500 font-black ml-0.5">{{stats.failed}}</span></span>
+                        <span class="text-slate-300 hidden sm:inline">•</span>
+                        <span class="text-slate-500 font-bold whitespace-nowrap">风控拦截 <span class="text-amber-500 font-black ml-0.5">{{stats.retries}}</span></span>
+                        <span class="text-slate-300 hidden sm:inline">•</span>
+                        <span class="text-slate-500 font-bold whitespace-nowrap">密码受阻 <span class="text-orange-500 font-black ml-0.5">{{stats.pwd_blocked || 0}}</span></span>
+                        <span class="text-slate-300 hidden sm:inline">•</span>
+                        <span class="text-slate-500 font-bold whitespace-nowrap">出现手机 <span class="text-purple-500 font-black ml-0.5">{{stats.phone_verify || 0}}</span></span>
+                        <span class="text-slate-300 hidden sm:inline">•</span>
+                        <span class="text-slate-500 font-bold whitespace-nowrap">总耗时 <span class="text-slate-800 font-black ml-0.5">{{stats.elapsed}}</span></span>
+                        <span class="text-slate-300 hidden sm:inline">•</span>
+                        <span class="text-slate-500 font-bold whitespace-nowrap">平均 <span class="text-slate-800 font-black ml-0.5">{{stats.avg_time}}</span></span>
                     </div>
                 </header>
 
@@ -398,55 +407,65 @@
                             </div>
                         </div>
                         <div v-show="currentTab === 'accounts'" class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                            <div class="px-5 md:px-8 py-5 md:py-6 border-b border-slate-100 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-slate-50/50">
-                                <div>
+                            <div class="px-5 md:px-8 py-4 border-b border-slate-100 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 bg-slate-50/50 min-h-[80px]">
+                                <div class="flex items-center gap-3">
                                     <h2 class="text-xl md:text-2xl font-black text-slate-800 tracking-tight">本地账号库</h2>
+                                    <button @click="fetchAccounts(true)" class="p-1.5 bg-white border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-50 active:scale-95 transition-all shadow-sm" title="刷新列表">
+                                        🔄
+                                    </button>
                                 </div>
-                                <div class="flex flex-wrap gap-2 md:gap-3 justify-start lg:justify-end items-center w-full lg:w-auto">
-                                    <span class="text-sm md:text-base font-black text-indigo-600 bg-indigo-50 px-3 py-1 rounded-lg">已选 ({{ selectedAccounts.length }})</span>
-                                    <button @click="showAccountsPlaintext = !showAccountsPlaintext" class="text-xs md:text-sm bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all shadow-sm font-bold flex items-center gap-2">
+
+                                <div class="flex flex-wrap gap-3 items-center w-full xl:w-auto">
+                                    <button @click="showAccountsPlaintext = !showAccountsPlaintext" class="text-sm bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-50 active:scale-95 transition shadow-sm font-bold flex items-center gap-1">
                                         <span>{{ showAccountsPlaintext ? '🙈' : '👁️' }}</span> {{ showAccountsPlaintext ? '脱敏' : '明文' }}
                                     </button>
-                                    <button @click="exportSelectedAccounts" :disabled="selectedAccounts.length === 0" class="text-xs md:text-sm bg-indigo-600 text-white px-4 md:px-5 py-2 rounded-xl hover:bg-indigo-700 active:scale-95 transition-all shadow-md shadow-indigo-500/20 disabled:opacity-50 font-bold flex items-center gap-2">
-                                        <span>📥</span> 导出 CPA
+                                    <button @click="toggleHideRegisterOnlyAccounts" class="text-sm bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-50 active:scale-95 transition shadow-sm font-bold flex items-center gap-1">
+                                        <span>{{ hideRegisterOnlyAccounts ? '✅' : '⚪' }}</span> {{ hideRegisterOnlyAccounts ? '已过滤仅注册成功' : '过滤仅注册成功' }}
                                     </button>
-                                    <button @click="exportSub2Api" :disabled="selectedAccounts.length === 0" class="text-xs md:text-sm bg-indigo-600 text-white px-4 md:px-5 py-2 rounded-xl hover:bg-indigo-700 active:scale-95 transition-all shadow-md shadow-indigo-500/20 disabled:opacity-50 font-bold flex items-center gap-2">
-                                        <span>📥</span> 导出 Sub2Api
-                                    </button>
-                                    <button @click="exportAccountsToTxt" :disabled="selectedAccounts.length === 0" class="text-xs md:text-sm bg-teal-600 text-white px-4 md:px-5 py-2 rounded-xl hover:bg-teal-700 active:scale-95 transition-all shadow-md shadow-teal-500/20 disabled:opacity-50 font-bold flex items-center gap-2">
-                                        <span>📄</span> 账密
-                                    </button>
-                                    <button @click="deleteSelectedAccounts" :disabled="selectedAccounts.length === 0" class="text-xs md:text-sm bg-rose-600 text-white px-4 md:px-5 py-2 rounded-xl hover:bg-rose-700 active:scale-95 transition-all shadow-md shadow-rose-500/20 disabled:opacity-50 font-bold flex items-center gap-2">
-                                        <span>🗑️</span> 删除
-                                    </button>
-                                    <button @click="bulkPushCPA" :disabled="selectedAccounts.length === 0" class="text-xs md:text-sm bg-emerald-600 text-white px-4 md:px-5 py-2 rounded-xl hover:bg-emerald-700 active:scale-95 transition-all shadow-md shadow-emerald-500/20 disabled:opacity-50 font-bold flex items-center gap-2">
-                                        <span>🚀</span> CPA
-                                    </button>
-                                    <button @click="bulkPushSub2API" :disabled="selectedAccounts.length === 0" class="text-xs md:text-sm bg-purple-600 text-white px-4 md:px-5 py-2 rounded-xl hover:bg-purple-700 active:scale-95 transition-all shadow-md shadow-purple-500/20 disabled:opacity-50 font-bold flex items-center gap-2">
-                                        <span>🛸</span> Sub
-                                    </button>
-                                    <button @click="fetchAccounts(true)" class="text-xs md:text-sm bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all shadow-sm font-bold flex items-center justify-center">
-                                        <span class="text-base">🔄</span>
-                                    </button>
+
+                                    <div v-if="selectedAccounts.length > 0" class="flex flex-wrap items-center gap-2 bg-indigo-50/80 border border-indigo-100 p-1.5 rounded-xl shadow-sm transition-all duration-300">
+                                        <span class="text-xs font-black text-indigo-700 px-2 border-r border-indigo-200">已选 {{ selectedAccounts.length }}</span>
+
+                                        <div class="flex items-center bg-white rounded-lg p-0.5 shadow-sm border border-slate-100">
+                                            <span class="text-[10px] text-slate-400 font-bold px-2">导出:</span>
+                                            <button @click="exportSelectedAccounts" class="px-2 py-1 text-xs font-bold text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded transition">CPA</button>
+                                            <button @click="exportSub2Api" class="px-2 py-1 text-xs font-bold text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded transition">Sub2Api</button>
+                                            <button @click="exportAccountsToTxt" class="px-2 py-1 text-xs font-bold text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded transition">账密</button>
+                                        </div>
+
+                                        <div class="flex items-center bg-white rounded-lg p-0.5 shadow-sm border border-slate-100">
+                                            <span class="text-[10px] text-slate-400 font-bold px-2">推送:</span>
+                                            <button @click="bulkPushCPA" class="px-2 py-1 text-xs font-bold text-emerald-600 hover:bg-emerald-50 rounded transition flex items-center"><span class="mr-1">🚀</span>CPA</button>
+                                            <button @click="bulkPushSub2API" class="px-2 py-1 text-xs font-bold text-purple-600 hover:bg-purple-50 rounded transition flex items-center"><span class="mr-1">🛸</span>Sub</button>
+                                        </div>
+
+                                        <button @click="deleteSelectedAccounts" class="px-3 py-1.5 bg-rose-500 text-white rounded-lg text-xs font-bold shadow-sm hover:bg-rose-600 transition ml-1">🗑️ 删除</button>
+                                    </div>
+
+                                    <div class="flex items-center gap-2 ml-auto xl:ml-2 border-l border-slate-200 pl-3">
+                                        <button @click="exportAllAccounts" class="px-3 py-1.5 bg-slate-200/70 text-slate-600 text-sm font-bold rounded-lg hover:bg-slate-300 transition flex items-center gap-1">📦 导出全部</button>
+                                        <button @click="clearAllAccounts" class="px-3 py-1.5 bg-rose-50 text-rose-600 border border-rose-200 text-sm font-bold rounded-lg hover:bg-rose-100 transition flex items-center gap-1">🗑️ 清空库</button>
+                                    </div>
                                 </div>
                             </div>
                             <div class="overflow-x-auto w-full">
                                 <table class="min-w-full divide-y divide-slate-100">
                                     <thead class="bg-slate-50/80">
                                         <tr>
-                                            <th class="px-5 md:px-8 py-4 text-left w-12"><input type="checkbox" @change="toggleAll" :checked="selectedAccounts.length === accounts.length && accounts.length > 0" class="form-checkbox w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 transition-all"></th>
+                                            <th class="px-5 md:px-8 py-4 text-left w-12"><input type="checkbox" @change="toggleAll" :checked="selectedAccounts.length === filteredAccounts.length && filteredAccounts.length > 0" class="form-checkbox w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 transition-all"></th>
                                             <th class="px-5 md:px-8 py-4 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest w-16">#</th>
                                             <th class="px-5 md:px-8 py-4 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest min-w-[200px]">邮箱账号</th>
                                             <th class="px-5 md:px-8 py-4 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest min-w-[150px]">登录密码</th>
                                             <th class="px-5 md:px-8 py-4 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest min-w-[180px]">入库（北京时间）</th>
+                                            <th class="px-5 md:px-8 py-4 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest min-w-[120px]">凭证状态</th>
                                             <th class="px-5 md:px-8 py-4 text-center text-[11px] font-black text-slate-400 uppercase tracking-widest min-w-[180px]">操作</th>
                                         </tr>
                                     </thead>
                                     <tbody class="bg-white divide-y divide-slate-50">
-                                        <tr v-if="accounts.length === 0">
+                                        <tr v-if="filteredAccounts.length === 0">
                                             <td colspan="6" class="px-6 py-16 text-center text-slate-400 font-medium bg-slate-50/30">暂无本地记录</td>
                                         </tr>
-                                        <tr v-for="(acc, index) in accounts" :key="index" class="hover:bg-indigo-50/40 transition duration-200" :class="{'bg-indigo-50/60': selectedAccounts.includes(acc)}">
+                                        <tr v-for="(acc, index) in filteredAccounts" :key="index" class="hover:bg-indigo-50/40 transition duration-200" :class="{'bg-indigo-50/60': selectedAccounts.includes(acc)}">
                                             <td class="px-5 md:px-8 py-4 whitespace-nowrap"><input type="checkbox" :value="acc" v-model="selectedAccounts" class="form-checkbox w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 transition-all"></td>
                                             <td class="px-5 md:px-8 py-4 whitespace-nowrap text-sm text-slate-400 font-mono font-medium">{{ index + 1 }}</td>
                                             <td class="px-5 md:px-8 py-4 whitespace-nowrap text-sm font-bold text-slate-700">
@@ -457,6 +476,17 @@
                                             </td>
                                             <td class="px-5 md:px-8 py-4 whitespace-nowrap text-sm text-slate-500 font-mono">
                                                 <span class="bg-slate-50 rounded-md px-2.5 py-1 border border-slate-100">{{ formatTime(acc.created_at) }}</span>
+                                            </td>
+                                            <td class="px-5 md:px-8 py-4 whitespace-nowrap">
+                                                <span v-if="acc.status === '有凭证'" class="px-2.5 py-1.5 text-[10px] font-black bg-emerald-50 text-emerald-600 rounded-md border border-emerald-200 shadow-sm flex items-center w-max gap-1">
+                                                    <span class="text-xs">✅</span> 完整凭证
+                                                </span>
+                                                <span v-else-if="acc.status === '仅注册成功'" class="px-2.5 py-1.5 text-[10px] font-black bg-amber-50 text-amber-600 rounded-md border border-amber-200 shadow-sm flex items-center w-max gap-1">
+                                                    <span class="text-xs">⚠️</span> 仅注册成功
+                                                </span>
+                                                <span v-else class="px-2.5 py-1.5 text-[10px] font-black bg-slate-50 text-slate-500 rounded-md border border-slate-200 shadow-sm flex items-center w-max gap-1">
+                                                    <span class="text-xs">❓</span> 未知状态
+                                                </span>
                                             </td>
                                             <td class="px-5 md:px-8 py-4 whitespace-nowrap text-center text-sm font-bold flex gap-2 justify-center">
                                                 <button @click="triggerAccountAction(acc, 'push')" class="text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-3 py-1.5 rounded-lg active:scale-95 transition-all shadow-sm">推CPA</button>
@@ -605,29 +635,33 @@
                                 </div>
                             </div>
 
-                            <div class="px-5 md:px-8 py-5 md:py-6 border-b border-slate-100 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-slate-50/50">
-                                <div><h2 class="text-xl md:text-2xl font-black text-slate-800 tracking-tight">微软邮箱资源库</h2></div>
-                                <div class="flex flex-wrap gap-2 md:gap-3 items-center">
-                                    <span class="text-sm md:text-base font-black text-sky-600 bg-sky-50 px-3 py-1 rounded-lg">已选 ({{ selectedMailboxes.length }})</span>
-                                    <button @click="showMailboxesPlaintext = !showMailboxesPlaintext" class="text-xs md:text-sm bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all shadow-sm font-bold flex items-center gap-2">
-                                        <span>{{ showMailboxesPlaintext ? '🙈' : '👁️' }}</span> {{ showMailboxesPlaintext ? '脱敏' : '明文' }}
-                                    </button>
-                                    <button @click="showImportMailboxModal = true" class="text-xs md:text-sm bg-sky-600 text-white px-4 md:px-5 py-2 rounded-xl hover:bg-sky-700 active:scale-95 transition-all shadow-md font-bold flex items-center gap-2">
-                                        <span>📥</span> 导入数据
-                                    </button>
-                                    <button @click="deleteSelectedMailboxes" :disabled="selectedMailboxes.length === 0" class="text-xs md:text-sm bg-rose-600 text-white px-4 md:px-5 py-2 rounded-xl hover:bg-rose-700 active:scale-95 transition-all shadow-md disabled:opacity-50 font-bold flex items-center gap-2">
-                                        <span>🗑️</span> 删除选中
-                                    </button>
-                                    <button @click="exportSelectedMailboxesToTxt" class="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-bold shadow-md hover:bg-emerald-600 transition-colors flex items-center gap-2">
-                                        <span>📄 导出 TXT</span>
-                                    </button>
-
-                                    <button @click="recoverSelectedMailboxes" class="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-bold shadow-md hover:bg-amber-600 transition-colors flex items-center gap-2">
-                                        <span>♻️ 恢复为正常状态</span>
-                                    </button>
-                                    <button @click="fetchMailboxes(true)" class="text-xs md:text-sm bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all shadow-sm font-bold">
+                            <div class="px-5 md:px-8 py-4 border-b border-slate-100 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 bg-slate-50/50 min-h-[80px]">
+                                <div class="flex items-center gap-3">
+                                    <h2 class="text-xl md:text-2xl font-black text-slate-800 tracking-tight">微软邮箱资源库</h2>
+                                    <button @click="fetchMailboxes(true)" class="p-1.5 bg-white border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-50 active:scale-95 transition-all shadow-sm" title="刷新列表">
                                         🔄
                                     </button>
+                                </div>
+
+                                <div class="flex flex-wrap gap-3 items-center w-full xl:w-auto">
+                                    <button @click="showImportMailboxModal = true" class="text-sm bg-sky-50 text-sky-600 border border-sky-200 px-3 py-1.5 rounded-lg hover:bg-sky-100 active:scale-95 transition shadow-sm font-bold flex items-center gap-1">
+                                        📥 导入数据
+                                    </button>
+                                    <button @click="showMailboxesPlaintext = !showMailboxesPlaintext" class="text-sm bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-50 active:scale-95 transition shadow-sm font-bold flex items-center gap-1">
+                                        <span>{{ showMailboxesPlaintext ? '🙈' : '👁️' }}</span> {{ showMailboxesPlaintext ? '脱敏' : '明文' }}
+                                    </button>
+
+                                    <div v-if="selectedMailboxes.length > 0" class="flex flex-wrap items-center gap-2 bg-indigo-50 border border-indigo-100 p-1.5 rounded-xl shadow-sm transition-all duration-300">
+                                        <span class="text-xs font-black text-indigo-600 px-2">已选 {{ selectedMailboxes.length }}</span>
+                                        <button @click="exportSelectedMailboxesToTxt" class="px-3 py-1 bg-white text-indigo-600 rounded-lg text-xs font-bold shadow-sm hover:bg-indigo-100 transition">📄 导出 TXT</button>
+                                        <button @click="recoverSelectedMailboxes" class="px-3 py-1 bg-white text-amber-600 rounded-lg text-xs font-bold shadow-sm hover:bg-amber-50 transition">♻️ 恢复正常</button>
+                                        <button @click="deleteSelectedMailboxes" class="px-3 py-1 bg-rose-500 text-white rounded-lg text-xs font-bold shadow-sm hover:bg-rose-600 transition">🗑️ 删除选中</button>
+                                    </div>
+
+                                    <div class="flex items-center gap-2 ml-auto xl:ml-2 border-l border-slate-200 pl-3">
+                                        <button @click="exportAllMailboxes" class="px-3 py-1.5 bg-slate-200/70 text-slate-600 text-sm font-bold rounded-lg hover:bg-slate-300 transition flex items-center gap-1">📦 导出全部</button>
+                                        <button @click="clearAllMailboxes" class="px-3 py-1.5 bg-rose-50 text-rose-600 border border-rose-200 text-sm font-bold rounded-lg hover:bg-rose-100 transition flex items-center gap-1">🗑️ 清空库</button>
+                                    </div>
                                 </div>
                             </div>
 
@@ -707,7 +741,8 @@
                                     <option value="cloudflare_temp_email">cloudflare_temp_email (CF 临时邮箱)</option>
                                     <option value="imap">imap (直连收件箱)</option>
                                     <option value="local_microsoft">本地微软邮箱库</option>
-                                    <option value="Gmail_OAuth">Gmail_OAuth</option>
+                                    <option value="gmail_fission">Gmail OAuth裂变</option>
+                                    <option value="Gmail_OAuth">Gmail_OAuth授权(cf转发gmail直接选此模式收件)</option>
                                     <option value="freemail">freemail</option>
                                     <option value="cloudmail">cloudmail</option>
                                     <option value="mail_curl">mail_curl</option>
@@ -716,7 +751,7 @@
                                     <option value="tempmail_org">tempmail_org</option>
                                     <option value="duckmail">duckmail (DuckMail 鸭子邮箱)</option>
                                     <option value="generator_email">generator_email</option>
-                                    <option value="temporam">Temporam.com (需填Cookie)</option>
+<!--                                    <option value="temporam">Temporam.com (需填Cookie)</option>-->
                                     <option value="tmailor">Tmailor.com (需填token)</option>
                                     <option value="fvia">FviaInboxes (需填authorization)</option>
                                     <option value="inboxes">Inboxes.com</option>
@@ -775,12 +810,12 @@
                                             <h4 class="text-sm font-black text-blue-800 tracking-wide">多级域名泛解析模式</h4>
                                             <p class="text-xs text-slate-500 mt-1 font-medium">开启后将自动使用指定域名层级。</p>
                                             <p class="text-[11px] text-slate-400 mt-1">第一次使用请填写好上方发信域名池后点击下方推送按钮，如果加入新主域也要点推送，推送只需要一次永久生效</p>
-                                            <p v-if="!['freemail', 'imap', 'cloudflare_temp_email', 'cloudmail'].includes(config.email_api_mode)" class="text-[11px] font-bold text-rose-600 mt-3 bg-rose-50 px-3 py-2 rounded-lg inline-block border border-rose-100 shadow-sm flex items-center gap-1.5">
+                                            <p v-if="!['freemail', 'imap', 'cloudflare_temp_email', 'cloudmail', 'Gmail_OAuth'].includes(config.email_api_mode)" class="text-[11px] font-bold text-rose-600 mt-3 bg-rose-50 px-3 py-2 rounded-lg inline-block border border-rose-100 shadow-sm flex items-center gap-1.5">
                                                 <span>⚠️</span> 当前模式不支持此功能！仅限 cloudflare_temp_email, freemail, imap, cloudmail。
                                             </p>
                                         </div>
-                                        <label class="relative inline-flex items-center shrink-0 mt-3 sm:mt-0" :class="['freemail', 'imap', 'cloudflare_temp_email', 'cloudmail'].includes(config.email_api_mode) ? 'cursor-pointer' : 'cursor-not-allowed opacity-50 grayscale'">
-                                            <input type="checkbox" v-model="config.enable_sub_domains" :disabled="!['freemail', 'imap', 'cloudflare_temp_email', 'cloudmail'].includes(config.email_api_mode)" class="sr-only peer">
+                                        <label class="relative inline-flex items-center shrink-0 mt-3 sm:mt-0" :class="['freemail', 'imap', 'cloudflare_temp_email', 'cloudmail', 'Gmail_OAuth'].includes(config.email_api_mode) ? 'cursor-pointer' : 'cursor-not-allowed opacity-50 grayscale'">
+                                            <input type="checkbox" v-model="config.enable_sub_domains" :disabled="!['freemail', 'imap', 'cloudflare_temp_email', 'cloudmail', 'Gmail_OAuth'].includes(config.email_api_mode)" class="sr-only peer">
                                             <div class="relative w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-blue-600 shadow-inner transition-colors duration-300"></div>
                                         </label>
                                     </div>
@@ -875,7 +910,7 @@
                                                    class="w-full appearance-none bg-white border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-colors shadow-sm font-mono text-sm">
 
                                             <input v-else type="text" v-model="config.gptmail_base" autocomplete="off"
-                                                   class="w-full appearance-none bg-white border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-colors shadow-sm font-mono text-sm">
+                                                   class="w-full appearance-none bg-white border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-colors shadow-sm font-mono text-sm" placeholder="https://your-domain.com">
 
                                             <button @click="showPwd.gpt_base = !showPwd.gpt_base" class="absolute right-3 top-1/2 -translate-y-1/2 text-lg text-slate-400 hover:text-blue-500">
                                                 {{ showPwd.gpt_base ? '👁️' : '🙈' }}
@@ -883,7 +918,7 @@
                                         </div>
                                     </div>
                                     <div>
-                                        <label class="block text-slate-700 text-xs font-extrabold mb-1.5 uppercase tracking-wider">管理员鉴权 (admin_auth)</label>
+                                        <label class="block text-slate-700 text-xs font-extrabold mb-1.5 uppercase tracking-wider">管理员鉴权 (ADMIN_PASSWORDS)</label>
                                         <div class="relative">
                                             <input :type="showPwd.cf ? 'text' : 'password'" v-model="config.admin_auth" class="w-full appearance-none bg-white border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 pr-10 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-colors shadow-sm font-mono text-sm">
                                             <button @click="showPwd.cf = !showPwd.cf" class="absolute right-3 top-1/2 -translate-y-1/2 text-lg text-slate-400 hover:text-amber-600 focus:outline-none transition-transform hover:scale-110">
@@ -983,12 +1018,30 @@
                                         <input type="text" v-model="config.local_microsoft.client_id" class="w-full appearance-none bg-slate-50 border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 shadow-inner font-mono text-sm" placeholder="如果导入的账号自带clientid这里则空着，如果你不想填也可以空着">
                                     </div>
 
-                                    <div v-if="config.local_microsoft.enable_fission" class="space-y-4 pt-4 border-t-2 border-dashed border-slate-100 animate-fade-in">
-                                        <div>
+                                    <div v-if="config.local_microsoft.enable_fission || config.local_microsoft.pool_fission" class="space-y-4 pt-4 border-t-2 border-dashed border-slate-100 animate-fade-in">
+                                        <div v-if="config.local_microsoft.enable_fission">
                                             <label class="block text-slate-700 text-xs font-extrabold mb-1.5 uppercase tracking-wider">裂变主邮箱账号</label>
                                             <input type="text" v-model="config.local_microsoft.master_email" class="w-full appearance-none bg-white border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 shadow-sm font-mono text-sm" placeholder="例如：example@outlook.com">
                                         </div>
                                         <div>
+                                            <label class="block text-slate-700 text-xs font-extrabold mb-1.5 uppercase tracking-wider">邮箱别名后缀生成模式</label>
+                                            <select v-model="config.local_microsoft.suffix_mode" class="w-full appearance-none bg-white border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 shadow-sm text-sm">
+                                                <option value="fixed">固定长度随机 (仅使用设置的最小长度)</option>
+                                                <option value="range">随机范围区间 (在最小与最大长度之间波动)</option>
+                                                <option value="mystic">高拟真模式 (英文名 + 单词 + 生日数字)</option>
+                                            </select>
+                                        </div>
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <div>
+                                                <label class="block text-slate-700 text-xs font-extrabold mb-1.5 uppercase tracking-wider">别名最小长度 (8~32)</label>
+                                                <input type="number" min="8" max="32" v-model.number="config.local_microsoft.suffix_len_min" class="w-full appearance-none bg-white border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 shadow-sm font-mono text-sm">
+                                            </div>
+                                            <div>
+                                                <label class="block text-slate-700 text-xs font-extrabold mb-1.5 uppercase tracking-wider">别名最大长度 (8~32)</label>
+                                                <input type="number" min="8" max="32" v-model.number="config.local_microsoft.suffix_len_max" class="w-full appearance-none bg-white border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 shadow-sm font-mono text-sm">
+                                            </div>
+                                        </div>
+                                        <div v-if="config.local_microsoft.enable_fission">
                                             <div class="flex justify-between items-end mb-1.5">
                                                 <label class="block text-slate-700 text-xs font-extrabold uppercase tracking-wider">主邮箱 Refresh Token</label>
                                                 <button @click="openFissionAuthModal" class="text-[11px] font-black text-indigo-700 hover:text-white bg-indigo-100 hover:bg-indigo-600 px-2.5 py-1 rounded-md shadow-sm border border-indigo-200 transition-all active:scale-95">
@@ -1004,6 +1057,67 @@
                                         </div>
                                     </div>
                                 </div>
+
+                                <div v-if="config.email_api_mode === 'gmail_fission' && config.gmail_oauth_mode"  class="animate-fade-in space-y-4">
+                                    <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+                                        <div class="flex items-center gap-3">
+                                            <div class="w-10 h-10 bg-red-50 text-red-600 rounded-xl flex items-center justify-center text-xl shadow-sm">G</div>
+                                            <div>
+                                                <h3 class="text-base font-bold text-slate-800">Gmail OAuth 裂变控制</h3>
+                                                <span class="text-[11px] text-rose-600 font-bold bg-rose-50 px-2 py-0.5 rounded mt-1 inline-block border border-rose-100">⚠️ 必须先在左侧API 模式选择Gmail_OAuth授权完毕后在回到此功能使用！</span>
+                                            </div>
+                                        </div>
+                                        <label class="relative inline-flex items-center cursor-pointer">
+                                            <input type="checkbox" v-model="config.gmail_oauth_mode.fission_enable" @change="saveConfig" class="sr-only peer">
+                                            <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
+                                        </label>
+                                    </div>
+
+                                    <div class="p-6 space-y-6" v-if="config.gmail_oauth_mode.fission_enable">
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            <div class="space-y-2">
+                                                <label class="text-sm font-bold text-slate-700 flex items-center gap-2">Gmail 主号 (Master)</label>
+                                                <input type="text" v-model="config.gmail_oauth_mode.master_email" @blur="saveConfig" placeholder="example@gmail.com"
+                                                       class="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-2.5 px-4 focus:outline-none focus:border-red-400 transition-all text-sm">
+                                            </div>
+
+                                            <div class="space-y-2">
+                                                <label class="text-sm font-bold text-slate-700">别名策略</label>
+                                                <select v-model="config.gmail_oauth_mode.fission_mode" @change="saveConfig"
+                                                        class="w-full bg-slate-50 border-2 border-slate-100 rounded-xl py-2.5 px-4 focus:outline-none focus:border-red-400 transition-all text-sm">
+                                                    <option value="suffix">加号大法 (+ 别名后缀)</option>
+                                                    <option value="dot">圆点大法 (. 忽略位置)</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div class="p-4 bg-red-50/30 rounded-xl border border-red-100 space-y-4" v-if="config.gmail_oauth_mode.fission_mode === 'suffix'">
+                                            <div class="flex items-center gap-2 text-red-700 font-bold text-sm mb-2">
+                                                <span>⚡ 后缀生成器设置</span>
+                                            </div>
+                                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                <div>
+                                                    <label class="block text-[11px] font-bold text-slate-500 uppercase mb-1">生成模式</label>
+                                                    <select v-model="config.gmail_oauth_mode.suffix_mode" @change="saveConfig" class="w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-400">
+                                                        <option value="fixed">Fixed (固定长度)</option>
+                                                        <option value="range">Range (随机范围)</option>
+                                                        <option value="mystic">Mystic (拟真词库)</option>
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label class="block text-[11px] font-bold text-slate-500 uppercase mb-1">最小长度</label>
+                                                    <input type="number" v-model="config.gmail_oauth_mode.suffix_len_min" @blur="saveConfig" class="w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-sm">
+                                                </div>
+                                                <div>
+                                                    <label class="block text-[11px] font-bold text-slate-500 uppercase mb-1">最大长度</label>
+                                                    <input type="number" v-model="config.gmail_oauth_mode.suffix_len_max" @blur="saveConfig" class="w-full bg-white border border-slate-200 rounded-lg py-2 px-3 text-sm">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+
                                 <div v-if="config.email_api_mode === 'fvia' && config.fvia" class="animate-fade-in space-y-4">
                                     <div class="flex items-center gap-2 mb-4">
                                         <span class="text-xs font-black text-amber-800 bg-amber-100 px-3 py-1.5 rounded-md border border-amber-200 shadow-sm uppercase tracking-wider">当前模式</span>
@@ -1326,23 +1440,23 @@
                                         <p class="mt-3 text-rose-600 font-black bg-rose-50/50 p-2 rounded-lg border border-rose-100">🔥 提示：此站可能存在强力的 Cloudflare 盾，建议开启“获取邮箱使用全局代理穿透”并使用优质代理。</p>
                                     </div>
                                 </div>
-                                <div v-if="config.email_api_mode === 'temporam'" class="space-y-4 mt-2 animate-fade-in">
-                                    <div class="flex items-center gap-2 mb-4">
-                                        <span class="text-xs font-black text-amber-800 bg-amber-100 px-3 py-1.5 rounded-md border border-amber-200 shadow-sm uppercase tracking-wider">当前模式</span>
-                                        <span class="text-sm font-black text-slate-700">Temporam.com (Cookie 模式)</span>
-                                    </div>
-                                    <div class="text-xs text-emerald-800 font-bold bg-emerald-50 border border-emerald-200 p-4 rounded-xl leading-relaxed shadow-sm">
-                                        <p class="flex items-center gap-1.5 text-sm"><span>✅</span> 已切换至 Temporam.com 临时邮箱</p>
-                                        <p class="mt-2 text-emerald-700 opacity-90">请在浏览器中访问 temporam.com，按 F12 打开开发者工具，在网络请求的 Request Headers 中复制完整的 <code>Cookie</code> 字符串。</p>
-                                        <p class="mt-3 text-rose-600 font-black bg-rose-50/50 p-2 rounded-lg border border-rose-100">🔥 提示：Cookie 失效时会导致无法收取验证码，请定期更新此 Cookie！</p>
-                                    </div>
-                                    <div>
-                                        <label class="block text-slate-700 text-xs font-extrabold mb-1.5 uppercase tracking-wider">抓取的 Cookie 字符串</label>
-                                        <div class="relative">
-                                            <textarea v-model="config.temporam.cookie" class="w-full appearance-none bg-white border border-slate-200 text-slate-700 rounded-lg py-3 px-3 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-colors shadow-sm font-mono text-xs h-28 placeholder:text-slate-300" placeholder="例如: remember_web_59ba...; XSRF-TOKEN=..."></textarea>
-                                        </div>
-                                    </div>
-                                </div>
+<!--                                <div v-if="config.email_api_mode === 'temporam'" class="space-y-4 mt-2 animate-fade-in">-->
+<!--                                    <div class="flex items-center gap-2 mb-4">-->
+<!--                                        <span class="text-xs font-black text-amber-800 bg-amber-100 px-3 py-1.5 rounded-md border border-amber-200 shadow-sm uppercase tracking-wider">当前模式</span>-->
+<!--                                        <span class="text-sm font-black text-slate-700">Temporam.com (Cookie 模式)</span>-->
+<!--                                    </div>-->
+<!--                                    <div class="text-xs text-emerald-800 font-bold bg-emerald-50 border border-emerald-200 p-4 rounded-xl leading-relaxed shadow-sm">-->
+<!--                                        <p class="flex items-center gap-1.5 text-sm"><span>✅</span> 已切换至 Temporam.com 临时邮箱</p>-->
+<!--                                        <p class="mt-2 text-emerald-700 opacity-90">请在浏览器中访问 temporam.com，按 F12 打开开发者工具，在网络请求的 Request Headers 中复制完整的 <code>Cookie</code> 字符串。</p>-->
+<!--                                        <p class="mt-3 text-rose-600 font-black bg-rose-50/50 p-2 rounded-lg border border-rose-100">🔥 提示：Cookie 失效时会导致无法收取验证码，请定期更新此 Cookie！</p>-->
+<!--                                    </div>-->
+<!--                                    <div>-->
+<!--                                        <label class="block text-slate-700 text-xs font-extrabold mb-1.5 uppercase tracking-wider">抓取的 Cookie 字符串</label>-->
+<!--                                        <div class="relative">-->
+<!--                                            <textarea v-model="config.temporam.cookie" class="w-full appearance-none bg-white border border-slate-200 text-slate-700 rounded-lg py-3 px-3 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-colors shadow-sm font-mono text-xs h-28 placeholder:text-slate-300" placeholder="例如: remember_web_59ba...; XSRF-TOKEN=..."></textarea>-->
+<!--                                        </div>-->
+<!--                                    </div>-->
+<!--                                </div>-->
                                 <div v-if="config.email_api_mode === 'tmailor' && config.tmailor" class="space-y-4 mt-2 animate-fade-in">
                                     <div class="flex items-center gap-2 mb-4">
                                         <span class="text-xs font-black text-amber-800 bg-amber-100 px-3 py-1.5 rounded-md border border-amber-200 shadow-sm uppercase tracking-wider">当前模式</span>
@@ -1698,6 +1812,32 @@
                                 </div>
                             </div>
 
+                            <div class="bg-white p-6 md:p-8 rounded-2xl shadow-sm hover:shadow-md transition-shadow duration-300 border border-slate-200/60 border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50/40 to-white" v-if="config.raw_proxy_pool">
+                                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 border-b border-cyan-100 pb-5 gap-4">
+                                    <div>
+                                        <h3 class="text-xl md:text-2xl font-black text-cyan-700 tracking-tight flex items-center gap-2"><span>🧦</span> 批量代理池</h3>
+                                        <p class="text-xs text-cyan-700/80 mt-2 font-medium">独立于 Clash 池，按列表轮换代理；启用后优先于 `warp_proxy_list`。</p>
+                                    </div>
+                                    <label class="relative inline-flex bg-white px-4 py-2.5 md:px-5 md:py-3 rounded-xl cursor-pointer hover:bg-cyan-50 transition-colors shadow-sm border border-cyan-200 w-full sm:w-auto items-center justify-center group">
+                                        <input type="checkbox" v-model="config.raw_proxy_pool.enable" class="sr-only peer">
+                                        <div class="relative w-11 h-6 shrink-0 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-cyan-600 shadow-inner transition-colors duration-300 group-hover:shadow-md"></div>
+                                        <span class="font-black text-cyan-900 text-sm md:text-base ml-3 tracking-wide">启用批量代理池</span>
+                                    </label>
+                                </div>
+                                <div class="space-y-4" :class="{'opacity-50 pointer-events-none grayscale-[50%] transition-opacity duration-300': !config.raw_proxy_pool.enable}">
+                                    <div class="bg-cyan-50/70 border border-cyan-200 rounded-2xl p-5 shadow-sm">
+                                        <label class="block text-cyan-800 text-xs font-black mb-2 flex items-center justify-between uppercase tracking-wider">
+                                            代理列表
+                                            <span class="text-[10px] font-bold text-cyan-500 bg-white px-2 py-0.5 rounded shadow-sm border border-cyan-100">一行一个</span>
+                                        </label>
+                                        <p class="text-xs text-cyan-700/80 mb-3 leading-relaxed">
+                                            支持 `http://...`、`https://...`、`socks5://...`、`socks5h://...`；未写协议时默认按 `socks5h://` 解析
+                                        </p>
+                                        <textarea v-model="rawProxyListStr" class="w-full appearance-none bg-white border border-cyan-200 text-cyan-900 rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-colors shadow-inner h-[160px] font-mono text-xs leading-relaxed placeholder:text-cyan-300" placeholder="http://user:pass@1.2.3.4:8080&#10;socks5://user:pass@1.2.3.5:1080&#10;1.2.3.6:1080:user:pass"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+
                             <div id="proxy-intelligence-pool" class="bg-white p-6 md:p-8 rounded-2xl shadow-sm hover:shadow-md transition-shadow duration-300 border border-slate-200/60 border-l-4 border-l-indigo-500 bg-gradient-to-br from-indigo-50/30 to-white" v-if="config.clash_proxy_pool">
                                 <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 md:mb-8 border-b border-indigo-100 pb-5 gap-4">
                                     <h3 class="text-xl md:text-2xl font-black text-indigo-700 tracking-tight flex items-center gap-2"><span>🌍</span> Clash 节点智能池</h3>
@@ -1881,43 +2021,56 @@
                         </div>
 
                         <div v-show="currentTab === 'cloud'" class="bg-white rounded-2xl shadow-sm hover:shadow-md transition-shadow duration-300 border border-slate-200 overflow-hidden">
-
-                            <div class="px-5 md:px-8 py-5 md:py-6 border-b border-slate-100 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-slate-50/50">
-                                <div class="flex flex-col sm:flex-row items-start sm:items-center gap-5">
-                                    <h2 class="text-xl md:text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-                                        <span>☁️</span> 云端库存
-                                    </h2>
-                                    <div class="flex items-center gap-1.5 bg-slate-200/60 p-1.5 rounded-xl border border-slate-300/50 shadow-inner">
-                                        <label :class="cloudFilters.includes('sub2api') ? 'bg-white shadow-sm border border-slate-200 text-purple-700' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-300/30'" class="flex items-center gap-2 px-4 py-2 cursor-pointer text-xs md:text-sm font-bold rounded-lg transition-all border border-transparent">
+                            <div class="px-5 md:px-8 py-4 border-b border-slate-100 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 bg-slate-50/50 min-h-[80px]">
+                                <div class="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                                    <div class="flex items-center gap-3">
+                                        <h2 class="text-xl md:text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
+                                            <span>☁️</span> 云端库存
+                                        </h2>
+                                        <button @click="fetchCloudAccounts" class="p-1.5 bg-white border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-50 active:scale-95 transition-all shadow-sm" title="刷新列表">
+                                            🔄
+                                        </button>
+                                    </div>
+                                    <div class="flex items-center gap-1.5 bg-slate-200/60 p-1.5 rounded-xl border border-slate-300/50 shadow-inner w-max">
+                                        <label :class="cloudFilters.includes('sub2api') ? 'bg-white shadow-sm border border-slate-200 text-purple-700' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-300/30'" class="flex items-center gap-2 px-3 py-1.5 cursor-pointer text-xs font-bold rounded-lg transition-all border border-transparent">
                                             <input type="checkbox" v-model="cloudFilters" value="sub2api" @change="fetchCloudAccounts" class="sr-only">
-                                            <span class="w-2.5 h-2.5 rounded-full shadow-inner" :class="cloudFilters.includes('sub2api') ? 'bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]' : 'bg-slate-300 shadow-slate-400/50'"></span> Sub2API
+                                            <span class="w-2 h-2 rounded-full shadow-inner" :class="cloudFilters.includes('sub2api') ? 'bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]' : 'bg-slate-300 shadow-slate-400/50'"></span> Sub2API
                                         </label>
-                                        <label :class="cloudFilters.includes('cpa') ? 'bg-white shadow-sm border border-slate-200 text-indigo-700' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-300/30'" class="flex items-center gap-2 px-4 py-2 cursor-pointer text-xs md:text-sm font-bold rounded-lg transition-all border border-transparent">
+                                        <label :class="cloudFilters.includes('cpa') ? 'bg-white shadow-sm border border-slate-200 text-indigo-700' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-300/30'" class="flex items-center gap-2 px-3 py-1.5 cursor-pointer text-xs font-bold rounded-lg transition-all border border-transparent">
                                             <input type="checkbox" v-model="cloudFilters" value="cpa" @change="fetchCloudAccounts" class="sr-only">
-                                            <span class="w-2.5 h-2.5 rounded-full shadow-inner" :class="cloudFilters.includes('cpa') ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]' : 'bg-slate-300 shadow-slate-400/50'"></span> CPA
+                                            <span class="w-2 h-2 rounded-full shadow-inner" :class="cloudFilters.includes('cpa') ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]' : 'bg-slate-300 shadow-slate-400/50'"></span> CPA
                                         </label>
                                     </div>
                                 </div>
-
-                                <div class="flex flex-wrap gap-2 md:gap-3 justify-start lg:justify-end items-center w-full lg:w-auto">
-                                    <span class="text-sm md:text-base font-black text-indigo-600 bg-indigo-50 px-3 py-1 rounded-lg">已选 ({{ selectedCloud.length }})</span>
-
-                                    <button @click="showCloudPlaintext = !showCloudPlaintext" class="text-xs md:text-sm bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all shadow-sm font-bold flex items-center gap-2">
+                                <div class="flex flex-wrap gap-3 items-center w-full xl:w-auto">
+                                    <button @click="showCloudPlaintext = !showCloudPlaintext" class="text-sm bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-50 active:scale-95 transition shadow-sm font-bold flex items-center gap-1">
                                         <span>{{ showCloudPlaintext ? '🙈' : '👁️' }}</span> {{ showCloudPlaintext ? '脱敏' : '明文' }}
                                     </button>
-                                    <button @click="fetchCloudAccounts" class="text-xs md:text-sm bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all shadow-sm font-bold flex items-center gap-2">
-                                        <span class="text-base">🔄</span> 刷新
-                                    </button>
-                                    <button @click="bulkCloudAction('check')" :disabled="!selectedCloud.length || isCloudActionLoading" class="text-xs md:text-sm bg-blue-600 text-white px-4 md:px-5 py-2 rounded-xl hover:bg-blue-700 active:scale-95 transition-all shadow-md shadow-blue-500/20 disabled:opacity-50 font-bold flex items-center gap-2">
-                                        <span v-if="isCloudActionLoading" class="animate-spin text-base">⏳</span>
-                                        <span v-else class="text-base">⚡</span> 批量测活
-                                    </button>
-                                    <button @click="bulkCloudAction('enable')" :disabled="!selectedCloud.length || isCloudActionLoading" class="text-xs md:text-sm bg-emerald-600 text-white px-4 md:px-5 py-2 rounded-xl hover:bg-emerald-700 active:scale-95 transition-all shadow-md shadow-emerald-500/20 disabled:opacity-50 font-bold flex items-center gap-2">
-                                        <span class="text-base">🌱</span> 批量启用
-                                    </button>
-                                    <button @click="bulkCloudAction('delete')" :disabled="!selectedCloud.length || isCloudActionLoading" class="text-xs md:text-sm bg-rose-600 text-white px-4 md:px-5 py-2 rounded-xl hover:bg-rose-700 active:scale-95 transition-all shadow-md shadow-rose-500/20 disabled:opacity-50 font-bold flex items-center gap-2">
-                                        <span class="text-base">🗑️</span> 删除选中
-                                    </button>
+                                    <div class="relative">
+                                        <select v-model="cloudStatusFilter" @change="changeCloudPageSize()" class="appearance-none bg-white border border-slate-200 text-slate-600 rounded-lg py-1.5 pl-3 pr-8 focus:outline-none focus:ring-0 focus:border-indigo-500 text-sm font-bold shadow-sm transition-colors cursor-pointer hover:bg-slate-50">
+                                            <option value="all">全部状态</option>
+                                            <option value="active">🟢 存活</option>
+                                            <option value="dead">🔴 失效</option>
+                                            <option value="disabled">⚪ 已禁用</option>
+                                        </select>
+                                        <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-400">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                                        </div>
+                                    </div>
+                                    <div v-if="selectedCloud.length > 0" class="flex flex-wrap items-center gap-2 bg-indigo-50/80 border border-indigo-100 p-1.5 rounded-xl shadow-sm transition-all duration-300">
+                                        <span class="text-xs font-black text-indigo-700 px-2 border-r border-indigo-200">已选 {{ selectedCloud.length }}</span>
+
+                                        <button @click="bulkCloudAction('check')" :disabled="isCloudActionLoading" class="px-3 py-1 bg-blue-500 text-white rounded-lg text-xs font-bold shadow-sm hover:bg-blue-600 transition flex items-center gap-1 disabled:opacity-50">
+                                            <span v-if="isCloudActionLoading" class="animate-spin">⏳</span>
+                                            <span v-else>⚡</span> 批量测活
+                                        </button>
+                                        <button @click="bulkCloudAction('enable')" :disabled="isCloudActionLoading" class="px-3 py-1 bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-sm hover:bg-emerald-600 transition flex items-center gap-1 disabled:opacity-50">
+                                            🌱 批量启用
+                                        </button>
+                                        <button @click="bulkCloudAction('delete')" :disabled="isCloudActionLoading" class="px-3 py-1 bg-rose-500 text-white rounded-lg text-xs font-bold shadow-sm hover:bg-rose-600 transition flex items-center gap-1 disabled:opacity-50 ml-1">
+                                            🗑️ 删除选中
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
 
@@ -2128,6 +2281,23 @@
                                                 <span class="ml-3 text-sm font-black text-blue-800 tracking-wide">同步备份到账号库</span>
                                             </label>
                                         </div>
+                                        <div class="col-span-2 md:col-span-1 bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:border-indigo-300 transition-all group">
+                                            <div class="flex items-center justify-between">
+                                                <div class="flex flex-col gap-1">
+                                                    <div class="flex items-center gap-2">
+                                                        <span class="text-xs font-black text-slate-700 uppercase tracking-widest">保留仅注册成功账号</span>
+                                                        <span class="px-1.5 py-0.5 rounded bg-indigo-50 text-[10px] text-indigo-500 font-bold border border-indigo-100">CPA 专属</span>
+                                                    </div>
+                                                    <p class="text-[11px] text-slate-400 font-medium leading-relaxed max-w-[240px]">
+                                                        开启后，即使未获取到 Token 的“半成品”账号也会强行入库，方便您后续手动登录提取。
+                                                    </p>
+                                                </div>
+                                                <label class="relative inline-flex items-center cursor-pointer">
+                                                    <input type="checkbox" v-model="config.cpa_mode.retain_reg_only" @change="saveConfig" class="sr-only peer">
+                                                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600 shadow-inner group-hover:shadow-md"></div>
+                                                </label>
+                                            </div>
+                                        </div>
                                     </div>
 
                                     <div class="col-span-1 lg:col-span-2 grid grid-cols-2 gap-5 md:gap-6">
@@ -2231,6 +2401,23 @@
                                                 <span class="ml-3 text-sm font-black text-blue-800 tracking-wide">同步备份到账号库</span>
                                             </label>
                                         </div>
+                                        <div class="col-span-2 md:col-span-1 bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:border-purple-300 transition-all group">
+                                            <div class="flex items-center justify-between">
+                                                <div class="flex flex-col gap-1">
+                                                    <div class="flex items-center gap-2">
+                                                        <span class="text-xs font-black text-slate-700 uppercase tracking-widest">保留仅注册成功账号</span>
+                                                        <span class="px-1.5 py-0.5 rounded bg-purple-50 text-[10px] text-purple-500 font-bold border border-purple-100">SUB 专属</span>
+                                                    </div>
+                                                    <p class="text-[11px] text-slate-400 font-medium leading-relaxed max-w-[240px]">
+                                                        防止因 Sub2API 绑定失败导致账号丢失。开启后将保留所有注册成功的原始账密。
+                                                    </p>
+                                                </div>
+                                                <label class="relative inline-flex items-center cursor-pointer">
+                                                    <input type="checkbox" v-model="config.sub2api_mode.retain_reg_only" @change="saveConfig" class="sr-only peer">
+                                                    <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600 shadow-inner group-hover:shadow-md"></div>
+                                                </label>
+                                            </div>
+                                        </div>
                                     </div>
 
                                     <div class="col-span-1 lg:col-span-2 grid grid-cols-2 gap-5 md:gap-6">
@@ -2259,6 +2446,14 @@
                                                     <option value="gpt-5.2">GPT-5.2</option>
                                                 </select>
                                             </div>
+                                        </div>
+                                        <div class="col-span-2 bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:border-purple-300 transition-colors mt-1">
+                                            <label class="block text-[11px] text-slate-500 font-black mb-2 uppercase tracking-wider">专属代理池</label>
+                                            <textarea v-model="config.sub2api_mode.default_proxy"
+                                                      rows="4"
+                                                      class="w-full appearance-none bg-slate-50 border border-slate-200 text-slate-700 font-mono text-sm rounded-lg py-2.5 px-4 focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-colors shadow-sm placeholder:text-slate-400 resize-y"
+                                                      placeholder="每行 1 个代理&#10;&#10;示例:&#10;socks5://user:pass@1.1.1.1:1080&#10;http://2.2.2.2:8080&#10;https://user:pass@proxy.example.com:443"></textarea>
+                                            <p class="text-[11px] text-slate-400 font-medium mt-2">💡 仅用于 Sub2API 推送与导出。0 行 = 不带代理，1 行 = 固定代理，2+ 行 = 按顺序轮转。</p>
                                         </div>
                                         <div class="col-span-2 bg-purple-50/50 p-5 md:p-6 rounded-2xl border border-purple-200 mt-2 space-y-6 shadow-sm">
                                             <h4 class="text-sm md:text-base font-black text-purple-800 flex items-center gap-2 pb-3 border-b border-purple-200/60 uppercase tracking-widest">
@@ -2418,21 +2613,93 @@
                             </div>
                         </div>
                         <div v-show="currentTab === 'concurrency'" v-if="config" class="grid grid-cols-1 lg:grid-cols-2 gap-5 md:gap-8">
+                            <div class="bg-white p-6 md:p-8 rounded-2xl shadow-sm hover:shadow-md transition-shadow duration-300 border border-slate-200/60 border-t-8 border-t-indigo-500 bg-gradient-to-br from-indigo-50/20 to-white lg:col-span-2">
+                                <h3 class="text-lg md:text-xl font-black text-indigo-700 mb-6 flex items-center gap-2 tracking-tight"><span>🗄️</span> 数据库存储引擎 <span class="text-xs font-bold text-rose-500 bg-rose-50 px-2 py-1 rounded border border-rose-100 ml-2">修改后需点左下角重启项目后生效</span></h3>
 
-                            <div class="bg-white p-6 md:p-8 rounded-2xl shadow-sm hover:shadow-md transition-shadow duration-300 border border-slate-200/60 border-t-8 border-t-slate-400 bg-gradient-to-br from-slate-50/30 to-white">
-                                <h3 class="text-lg md:text-xl font-black text-slate-700 mb-6 flex items-center gap-2 tracking-tight"><span>🔒</span> 杂项与安全控制</h3>
-                                <div class="bg-rose-50/50 p-5 md:p-6 rounded-2xl border border-rose-100 shadow-inner">
-                                    <label class="block text-rose-800 text-xs font-black uppercase tracking-wider mb-3">Web 控制台保护密码</label>
-                                    <div class="relative">
-                                        <input :type="showPwd.web ? 'text' : 'password'" v-model="config.web_password" class="w-full appearance-none bg-white border-2 border-rose-200 text-rose-700 font-extrabold rounded-xl py-3.5 px-4 pr-12 focus:outline-none focus:ring-0 focus:border-rose-500 transition-colors shadow-sm text-base">
-                                        <button @click="showPwd.web = !showPwd.web" class="absolute right-4 top-1/2 -translate-y-1/2 text-xl text-slate-400 hover:text-rose-600 focus:outline-none transition-transform hover:scale-110">
-                                            {{ showPwd.web ? '👁️' : '🙈' }}
-                                        </button>
+                                <div class="flex flex-col md:flex-row gap-4 mb-6">
+                                    <label class="flex-1 cursor-pointer group">
+                                        <input type="radio" v-model="config.database.type" value="sqlite" class="peer sr-only">
+                                        <div class="p-4 border-2 rounded-xl text-center font-bold text-slate-500 peer-checked:border-indigo-500 peer-checked:bg-indigo-50 peer-checked:text-indigo-700 transition-all shadow-sm group-hover:bg-slate-50">
+                                            📦 本地 SQLite (默认)
+                                        </div>
+                                    </label>
+                                    <label class="flex-1 cursor-pointer group">
+                                        <input type="radio" v-model="config.database.type" value="mysql" class="peer sr-only">
+                                        <div class="p-4 border-2 rounded-xl text-center font-bold text-slate-500 peer-checked:border-indigo-500 peer-checked:bg-indigo-50 peer-checked:text-indigo-700 transition-all shadow-sm group-hover:bg-slate-50">
+                                            ☁️ 云端 MySQL
+                                        </div>
+                                    </label>
+                                </div>
+
+                                <div v-show="config.database.type === 'mysql'" class="grid grid-cols-1 md:grid-cols-2 gap-5 bg-white p-5 rounded-xl border border-indigo-100 shadow-inner animate-fade-in">
+                                    <div>
+                                        <label class="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">数据库地址 (Host)</label>
+                                        <input type="text" v-model="config.database.mysql.host" class="w-full appearance-none bg-slate-50 border border-slate-200 text-slate-800 font-bold rounded-lg py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors shadow-sm">
                                     </div>
-                                    <p class="text-[11px] text-rose-500/80 mt-3 font-medium bg-white px-3 py-1.5 rounded-lg border border-rose-100 shadow-sm inline-block">请妥善保管此密码，热重载后立即生效</p>
+                                    <div>
+                                        <label class="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">端口 (Port)</label>
+                                        <input type="number" v-model.number="config.database.mysql.port" class="w-full appearance-none bg-slate-50 border border-slate-200 text-slate-800 font-bold rounded-lg py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors shadow-sm">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">用户名 (User)</label>
+                                        <input type="text" v-model="config.database.mysql.user" class="w-full appearance-none bg-slate-50 border border-slate-200 text-slate-800 font-bold rounded-lg py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors shadow-sm">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">密码 (Password)</label>
+                                        <div class="relative">
+                                            <input :type="showPwd.db_pass ? 'text' : 'password'" v-model="config.database.mysql.password" class="w-full appearance-none bg-slate-50 border border-slate-200 text-slate-800 font-bold rounded-lg py-2.5 px-3 pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors shadow-sm font-mono">
+                                            <button @click="showPwd.db_pass = !showPwd.db_pass" class="absolute right-3 top-1/2 -translate-y-1/2 text-lg text-slate-400 hover:text-indigo-600 transition-transform">
+                                                {{ showPwd.db_pass ? '👁️' : '🙈' }}
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="md:col-span-2">
+                                        <label class="block text-xs font-black text-slate-600 uppercase tracking-wider mb-2">数据库名 (Database Name)</label>
+                                        <input type="text" v-model="config.database.mysql.db_name" class="w-full appearance-none bg-slate-50 border border-slate-200 text-slate-800 font-bold rounded-lg py-2.5 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors shadow-sm">
+                                    </div>
                                 </div>
                             </div>
 
+                            <div class="bg-white p-6 md:p-8 rounded-2xl shadow-sm hover:shadow-md transition-shadow duration-300 border border-slate-200/60 border-t-8 border-t-slate-400 bg-gradient-to-br from-slate-50/30 to-white">
+                                <h3 class="text-lg md:text-xl font-black text-slate-700 mb-6 flex items-center gap-2 tracking-tight"><span>🔒</span> 杂项与安全控制</h3>
+                                <div class="flex flex-col gap-6">
+                                    <div class="bg-rose-50/50 p-5 md:p-6 rounded-2xl border border-rose-100 shadow-inner">
+                                        <label class="block text-rose-800 text-xs font-black uppercase tracking-wider mb-3">Web 控制台保护密码</label>
+                                        <div class="relative">
+                                            <input :type="showPwd.web ? 'text' : 'password'" v-model="config.web_password" class="w-full appearance-none bg-white border-2 border-rose-200 text-rose-700 font-extrabold rounded-xl py-3.5 px-4 pr-12 focus:outline-none focus:ring-0 focus:border-rose-500 transition-colors shadow-sm text-base">
+                                            <button @click="showPwd.web = !showPwd.web" class="absolute right-4 top-1/2 -translate-y-1/2 text-xl text-slate-400 hover:text-rose-600 focus:outline-none transition-transform hover:scale-110">
+                                                {{ showPwd.web ? '👁️' : '🙈' }}
+                                            </button>
+                                        </div>
+                                        <p class="text-[11px] text-rose-500/80 mt-3 font-medium bg-white px-3 py-1.5 rounded-lg border border-rose-100 shadow-sm inline-block">请妥善保管此密码，热重载后立即生效</p>
+                                    </div>
+
+                                    <div class="bg-slate-50 p-5 md:p-6 rounded-2xl border border-slate-200 shadow-inner">
+                                        <label class="block text-slate-600 text-xs font-black uppercase tracking-wider mb-3 flex items-center">
+                                            <span>终端日志显示上限</span>
+                                            <span class="text-[10px] text-slate-400 font-normal ml-2 bg-white px-2 py-0.5 rounded border border-slate-200">超出设定值后自动删除最早日志防卡顿</span>
+                                        </label>
+                                        <div>
+                                            <input type="number" v-model.number="config.max_log_lines" class="w-full appearance-none bg-white border-2 border-slate-200 text-slate-800 font-bold rounded-xl py-3.5 px-4 focus:outline-none focus:ring-0 focus:border-slate-400 transition-colors shadow-sm text-base">
+                                        </div>
+                                        <p class="text-[11px] text-amber-600/80 mt-3 font-medium bg-amber-50 px-3 py-1.5 rounded-lg border border-amber-100 shadow-sm inline-block">
+                                            ⚠️ 设置过大(>1000)可能导致浏览器严重卡顿
+                                        </p>
+                                    </div>
+
+                                    <div class="bg-amber-50/50 p-5 md:p-6 rounded-2xl border border-amber-200/60 shadow-inner">
+                                        <label class="relative inline-flex items-center cursor-pointer group w-full">
+                                            <input type="checkbox" v-model="config.disable_forced_takeover" class="sr-only peer">
+                                            <div class="relative w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-amber-500 shadow-inner transition-colors duration-300"></div>
+                                            <span class="ml-4 text-sm font-black text-amber-900 tracking-wide flex-1">放弃强行变道走无密码 OTP</span>
+                                        </label>
+                                        <p class="text-[11px] text-amber-700/80 mt-3 font-medium bg-amber-100/50 px-3 py-1.5 rounded-lg border border-amber-200 shadow-sm inline-block">
+                                            开启后，不再进入无密码接管流程，直接放弃，如果开启了接码，将节省 HeroSMS 接码成本。
+                                        </p>
+                                    </div>
+
+                                </div>
+                            </div>
                             <div class="bg-white p-6 md:p-8 rounded-2xl shadow-sm hover:shadow-md transition-shadow duration-300 border border-slate-200/60 border-t-8 border-t-amber-400 bg-gradient-to-br from-amber-50/30 to-white">
                                 <h3 class="text-lg md:text-xl font-black text-amber-600 mb-6 flex items-center gap-2 tracking-tight"><span>⚡</span> 并发与时延微调</h3>
                                 <div class="bg-amber-50/50 p-5 md:p-6 rounded-2xl border border-amber-200/60 mb-6 shadow-inner flex flex-col md:flex-row justify-between items-start md:items-center gap-5">
@@ -2477,6 +2744,23 @@
                                     <div class="w-full md:w-1/3 bg-blue-50/50 p-5 rounded-2xl border border-blue-200 flex flex-col justify-center shadow-sm">
                                         <label class="block text-center font-black text-blue-800 text-xs mb-3 uppercase tracking-wider">单次产出目标 <span class="text-[10px] font-bold text-blue-500/80 block mt-1">(0为无限)</span></label>
                                         <input type="number" v-model.number="config.normal_mode.target_count" class="w-full md:w-4/5 mx-auto appearance-none bg-white border-2 border-blue-300 text-blue-700 font-black text-2xl md:text-3xl rounded-xl py-3 md:py-4 focus:outline-none focus:ring-4 focus:ring-blue-500/20 focus:border-blue-500 transition-colors shadow-inner text-center">
+                                    </div>
+                                </div>
+                                <div class="col-span-2 md:col-span-1 bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:border-indigo-300 transition-all group">
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex flex-col gap-1">
+                                            <div class="flex items-center gap-2">
+                                                <span class="text-xs font-black text-slate-700 uppercase tracking-widest">保留仅注册成功账号</span>
+                                                <span class="px-1.5 py-0.5 rounded bg-indigo-50 text-[10px] text-indigo-500 font-bold border border-indigo-100">常规模式专属</span>
+                                            </div>
+                                            <p class="text-[11px] text-slate-400 font-medium leading-relaxed max-w-[240px]">
+                                                开启后，即使未获取到 Token 的“半成品”账号也会强行入库，方便您后续手动登录提取。
+                                            </p>
+                                        </div>
+                                        <label class="relative inline-flex items-center cursor-pointer">
+                                            <input type="checkbox" v-model="config.retain_reg_only" @change="saveConfig" class="sr-only peer">
+                                            <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600 shadow-inner group-hover:shadow-md"></div>
+                                        </label>
                                     </div>
                                 </div>
                             </div>
@@ -2549,6 +2833,15 @@
     </div>
 </div>
     </div>
+    <script>
+        (function () {
+            try {
+                if (localStorage.getItem('ui_theme_mode') === 'dark') {
+                    document.body.classList.add('theme-dark');
+                }
+            } catch (e) {}
+        })();
+    </script>
     <script src="/static/js/app.js?v=__VER__"></script>
 </body>
 </html>

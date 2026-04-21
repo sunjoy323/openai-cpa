@@ -240,6 +240,30 @@ services:
 
 ```
 
+The repository includes a ready-to-use `docker-compose2.yml` for starting the **Wenfxl Codex Manager Web Console** with persistent config and data mounts. Stateless containers can connect to a cloud MySQL database, and all configuration parameters and data will be stored in the cloud database.
+
+Current compose example:
+
+```yaml
+version: '3.8'
+
+services:
+  codex-web:
+    image: wenfxl/wenfxl-codex-manager:latest
+    container_name: wenfxl_codex_manager
+    ports:
+      - "8000:8000"
+    restart: always
+    environment:
+      - TZ=Asia/Shanghai
+      - DB_TYPE=mysql
+      - DB_HOST=MySQL IP
+      - DB_PORT=3306
+      - DB_USER=root
+      - DB_PASS=password
+      - DB_NAME=wenfxl_manager
+```
+
 ### Docker deployment steps
 
 1. Place `docker-compose.yml` and `config.yaml` in the same directory.

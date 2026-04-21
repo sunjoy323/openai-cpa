@@ -69,3 +69,13 @@ class TemporaryMailService:
         except:
             pass
         return {}
+
+    def get_message_body(self, mail_id: str) -> str:
+        url = f"https://temporarymail.com/view/?i={mail_id}&width=0"
+        try:
+            res = self.session.get(url, headers=self.headers, timeout=10)
+            if res.status_code == 200:
+                return res.text
+        except Exception:
+            pass
+        return ""

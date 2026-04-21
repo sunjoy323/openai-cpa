@@ -1,12 +1,32 @@
 const { createApp } = Vue;
 
+function normalizeBooleanLike(value, defaultValue = false) {
+    if (value === true || value === false) {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+            return true;
+        }
+        if (['0', 'false', 'no', 'off', ''].includes(normalized)) {
+            return false;
+        }
+    }
+    if (typeof value === 'number') {
+        return value !== 0;
+    }
+    return defaultValue;
+}
+
 createApp({
     data() {
         return {
-            appVersion: 'v10.1.5',
+            appVersion: 'v11.1.9',
             isLoggedIn: !!localStorage.getItem('auth_token'),
             loginPassword: '',
             currentTab: window.location.hash.replace('#', '') || 'console',
+            isDarkMode: localStorage.getItem('ui_theme_mode') === 'dark',
 			showAccountsPlaintext: false,
             isRunning: false,
             tabs: [
@@ -55,8 +75,10 @@ createApp({
             config: null,
             blacklistStr: "",
             warpListStr: "",
+            rawProxyListStr: "",
             accounts: [],
             selectedAccounts: [],
+            hideRegisterOnlyAccounts: false,
 			currentPage: 1,
             pageSize: 10,
             totalAccounts: 0,
@@ -90,6 +112,7 @@ createApp({
                 fvia_token: false,
                 subUrl: false,
                 showMailboxesPlaintext: false,
+                db_pass: false,
                 master_rt: false
             },
 
@@ -145,9 +168,19 @@ createApp({
                 instances: [],
                 groups: []
             },
+            gmail_oauth_mode: {
+                master_email: '',
+                fission_enable: false,
+                fission_mode: 'suffix',
+                suffix_mode: 'mystic',
+                suffix_len_min: 8,
+                suffix_len_max: 12
+            },
+            cloudStatusFilter: 'all',
         };
     },
     mounted() {
+        this.applyTheme();
         if (this.isLoggedIn) {
             this.initApp();
         }
@@ -168,6 +201,9 @@ createApp({
         totalPages() {
             return Math.ceil(this.totalAccounts / this.pageSize) || 1;
         },
+        filteredAccounts() {
+            return this.accounts;
+        },
         cloudTotalPages() {
             return Math.ceil(this.cloudTotal / this.cloudPageSize) || 1;
         },
@@ -179,6 +215,16 @@ createApp({
         }
     },
     methods: {
+        applyTheme() {
+            const nextMode = this.isDarkMode ? 'dark' : 'light';
+            document.body.classList.toggle('theme-dark', this.isDarkMode);
+            localStorage.setItem('ui_theme_mode', nextMode);
+        },
+        toggleTheme() {
+            this.isDarkMode = !this.isDarkMode;
+            this.applyTheme();
+            this.showToast(this.isDarkMode ? '已切换为护眼模式' : '已切换为日间模式', 'info');
+        },
         showToast(message, type = 'info') {
             const id = this.toastId++;
             this.toasts.push({ id, message, type });
@@ -310,19 +356,44 @@ createApp({
                 if (!this.config.local_microsoft) {
                     this.config.local_microsoft = {
                         enable_fission: false,
+                        pool_fission: false,
                         master_email: '',
                         client_id: '',
-                        refresh_token: ''
+                        refresh_token: '',
+                        suffix_mode: 'fixed',
+                        suffix_len_min: 8,
+                        suffix_len_max: 8
                     };
+                }
+                if (this.config.local_microsoft.suffix_mode === undefined) {
+                    this.config.local_microsoft.suffix_mode = 'fixed';
+                }
+                if (this.config.local_microsoft.suffix_len_min === undefined) {
+                    this.config.local_microsoft.suffix_len_min = 8;
+                }
+                if (this.config.local_microsoft.suffix_len_max === undefined) {
+                    this.config.local_microsoft.suffix_len_max = 8;
+                }
+                if (this.config.local_microsoft.pool_fission === undefined) {
+                    this.config.local_microsoft.pool_fission = false;
                 }
                 if (this.config.sub2api_mode.test_model === undefined) {
                     this.config.sub2api_mode.test_model = 'gpt-5.2';
+                }
+                if (Array.isArray(this.config.sub2api_mode.default_proxy)) {
+                    this.config.sub2api_mode.default_proxy = this.config.sub2api_mode.default_proxy.join('\n');
+                }
+                if (this.config.sub2api_mode.default_proxy === undefined) {
+                    this.config.sub2api_mode.default_proxy = '';
                 }
                 if (!this.config.fvia) {
                     this.config.fvia = { token: '' };
                 }
                 if (!this.config.tmailor) {
                     this.config.tmailor = { current_token: '' };
+                }
+                if (!this.config.max_log_lines) {
+                    this.config.max_log_lines = 500;
                 }
                 if (!this.config.temporam) {
                     this.config.temporam = { cookie: '' };
@@ -335,6 +406,15 @@ createApp({
                 }
                 if (!this.config.tg_bot.template_stop) {
                     this.config.tg_bot.template_stop = "🛑 <b>系统已收到停止指令</b>\n\n📊 <b>最终运行统计</b>：\n成功率: {success_rate}% · 成功: {success}/{target} · 失败: {failed} 次 · 风控拦截: {retries} 次 · 密码受阻: {pwd_blocked} 次 · 出现手机: {phone_verify} 次 · 总耗时: {elapsed_time}s · 平均单号: {avg_time}s";
+                }
+                if (!this.config.database) {
+                    this.config.database = {
+                        type: 'sqlite',
+                        mysql: { host: '127.0.0.1', port: 3306, user: 'root', password: '', db_name: 'wenfxl_manager' }
+                    };
+                }
+                if (!this.config.database.mysql) {
+                    this.config.database.mysql = { host: '127.0.0.1', port: 3306, user: 'root', password: '', db_name: 'wenfxl_manager' };
                 }
 				if (!this.config.sub_domain_level) {
                     this.config.sub_domain_level = 1;
@@ -362,6 +442,8 @@ createApp({
                 }
                 if(this.config.clash_proxy_pool && Array.isArray(this.config.clash_proxy_pool.blacklist)) {
                     this.blacklistStr = this.config.clash_proxy_pool.blacklist.join('\n');
+                } else {
+                    this.blacklistStr = '';
                 }
                 if (this.config.clash_proxy_pool.cluster_count !== undefined) {
                     this.clashPool.count = parseInt(this.config.clash_proxy_pool.cluster_count) || 5;
@@ -369,9 +451,21 @@ createApp({
                 if (this.config.clash_proxy_pool.sub_url !== undefined) {
                     this.clashPool.subUrl = this.config.clash_proxy_pool.sub_url;
                 }
+                if (!this.config.raw_proxy_pool || typeof this.config.raw_proxy_pool !== 'object' || Array.isArray(this.config.raw_proxy_pool)) {
+                    this.config.raw_proxy_pool = { enable: false, proxy_list: [] };
+                } else {
+                    this.config.raw_proxy_pool.enable = normalizeBooleanLike(this.config.raw_proxy_pool.enable, false);
+                    if (!Array.isArray(this.config.raw_proxy_pool.proxy_list)) {
+                        this.config.raw_proxy_pool.proxy_list = [];
+                    }
+                }
                 if(Array.isArray(this.config.warp_proxy_list)) {
                     this.warpListStr = this.config.warp_proxy_list.join('\n');
+                } else {
+                    this.config.warp_proxy_list = [];
+                    this.warpListStr = '';
                 }
+                this.rawProxyListStr = this.config.raw_proxy_pool.proxy_list.join('\n');
                 if (this.config.cluster_node_name === undefined) this.config.cluster_node_name = '';
                 if (this.config.cluster_master_url === undefined) this.config.cluster_master_url = '';
                 if (this.config.cluster_secret === undefined) this.config.cluster_secret = 'wenfxl666';
@@ -384,7 +478,33 @@ createApp({
                     this.config.clash_proxy_pool.cluster_count = parseInt(this.clashPool.count) || 5;
                     this.config.clash_proxy_pool.sub_url = this.clashPool.subUrl;
                 }
+                if (this.config?.sub2api_mode) {
+                    this.config.sub2api_mode.default_proxy = String(this.config.sub2api_mode.default_proxy || '')
+                        .split(/\r?\n/)
+                        .map(s => s.trim())
+                        .filter(s => s)
+                        .join('\n');
+                }
+                if (this.config.local_microsoft) {
+                    const mode = String(this.config.local_microsoft.suffix_mode || 'fixed').toLowerCase();
+                    this.config.local_microsoft.suffix_mode = ['fixed', 'range', 'mystic'].includes(mode) ? mode : 'fixed';
+
+                    let minLen = parseInt(this.config.local_microsoft.suffix_len_min, 10);
+                    let maxLen = parseInt(this.config.local_microsoft.suffix_len_max, 10);
+                    if (Number.isNaN(minLen)) minLen = 8;
+                    if (Number.isNaN(maxLen)) maxLen = minLen;
+                    minLen = Math.max(8, Math.min(32, minLen));
+                    maxLen = Math.max(8, Math.min(32, maxLen));
+                    if (maxLen < minLen) maxLen = minLen;
+                    this.config.local_microsoft.suffix_len_min = minLen;
+                    this.config.local_microsoft.suffix_len_max = maxLen;
+                }
                 this.config.warp_proxy_list = this.warpListStr.split('\n').map(s => s.trim()).filter(s => s);
+                if (!this.config.raw_proxy_pool || typeof this.config.raw_proxy_pool !== 'object' || Array.isArray(this.config.raw_proxy_pool)) {
+                    this.config.raw_proxy_pool = { enable: false, proxy_list: [] };
+                }
+                this.config.raw_proxy_pool.enable = normalizeBooleanLike(this.config.raw_proxy_pool.enable, false);
+                this.config.raw_proxy_pool.proxy_list = this.rawProxyListStr.split('\n').map(s => s.trim()).filter(s => s);
                 const res = await this.authFetch('/api/config', {
                     method: 'POST', body: JSON.stringify(this.config)
                 });
@@ -400,7 +520,12 @@ createApp({
                 this.currentPage = 1;
             }
             try {
-                const res = await this.authFetch(`/api/accounts?page=${this.currentPage}&page_size=${this.pageSize}`);
+                let url = `/api/accounts?page=${this.currentPage}&page_size=${this.pageSize}`;
+                if (this.hideRegisterOnlyAccounts) {
+                    url += '&hide_reg=1';
+                }
+
+                const res = await this.authFetch(url);
                 const data = await res.json();
                 if(data.status === 'success') {
                     this.accounts = data.data ? data.data : data;
@@ -655,10 +780,14 @@ createApp({
 			}
         },
         toggleAll(event) {
-            if (event.target.checked) this.selectedAccounts = [...this.accounts];
+            if (event.target.checked) this.selectedAccounts = [...this.filteredAccounts];
             else this.selectedAccounts = [];
         },
-
+        toggleHideRegisterOnlyAccounts() {
+            this.hideRegisterOnlyAccounts = !this.hideRegisterOnlyAccounts;
+            this.currentPage = 1;
+            this.fetchAccounts(true);
+        },
 		async toggleSystem() {
             if (this.isToggling) return;
             this.isToggling = true;
@@ -846,9 +975,9 @@ createApp({
                     }
                     this.logs.push(...this.logBuffer);
                     this.logBuffer = [];
-
-                    if (this.logs.length > 500) {
-                        this.logs.splice(0, this.logs.length - 500);
+                    const maxLines = (this.config && this.config.max_log_lines) ? this.config.max_log_lines : 500;
+                    if (this.logs.length > maxLines) {
+                        this.logs.splice(0, this.logs.length - maxLines);
                     }
                     this.$nextTick(() => {
                         if (container && (isScrolledToBottom || this.logs.length < 20)) {
@@ -1425,7 +1554,7 @@ createApp({
             }
             const types = this.cloudFilters.join(',');
             try {
-                const res = await this.authFetch(`/api/cloud/accounts?types=${types}&page=${this.cloudPage}&page_size=${this.cloudPageSize}`);
+                const res = await this.authFetch(`/api/cloud/accounts?types=${types}&status_filter=${this.cloudStatusFilter}&page=${this.cloudPage}&page_size=${this.cloudPageSize}`);
                 const data = await res.json();
                 if(data.status === 'success') {
                     this.cloudAccounts = (data.data || []).map(acc => ({
@@ -1558,19 +1687,18 @@ createApp({
         },
         async remoteControlNode(nodeName, action) {
             try {
-                // 调用带验证的控制接口
                 const res = await this.authFetch('/api/cluster/control', {
                     method: 'POST',
                     body: JSON.stringify({ node_name: nodeName, action: action })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    this.showToast(`✅ 指令 [${action}] 已成功发送至节点: ${nodeName}`, 'success'); //
+                    this.showToast(`✅ 指令 [${action}] 已成功发送至节点: ${nodeName}`, 'success');
                 } else {
-                    this.showToast(data.message, 'warning'); //
+                    this.showToast(data.message, 'warning');
                 }
             } catch (e) {
-                this.showToast('控制请求异常', 'error'); //
+                this.showToast('控制请求异常', 'error');
             }
         },
         formatDuration(seconds) {
@@ -1933,7 +2061,6 @@ createApp({
                 this.outlookAuth.isGenerating = false;
             }
         },
-
         async submitOutlookAuthCode() {
             this.outlookAuth.isLoading = true;
             try {
@@ -2112,6 +2239,212 @@ createApp({
                     if (el) el.scrollIntoView({ behavior: 'smooth' });
                 });
             }
+        },
+        async exportAllAccounts() {
+            try {
+                const res = await this.authFetch('/api/accounts/export_all', { method: 'POST' });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    const allData = data.data;
+                    if (allData.length === 0) {
+                        this.showToast('账号库是空的，无需导出', 'warning');
+                        return;
+                    }
+
+                    const zip = new JSZip();
+                    const timestamp = Math.floor(Date.now() / 1000);
+
+                    const txtContent = allData.map(acc => `${acc.email}----${acc.password}`).join('\n');
+                    zip.file(`accounts_list_${timestamp}.txt`, txtContent);
+
+                    const cpaFolder = zip.folder("cpa");
+                    const sub2apiFolder = zip.folder("sub2api");
+
+                    const proxyPool = this.buildSub2ApiProxyPool(this.config?.sub2api_mode?.default_proxy || "");
+
+                    const validAccounts = allData.filter(acc => acc.token_data && acc.token_data.access_token);
+
+                    validAccounts.forEach((acc, index) => {
+                        const accEmail = acc.email || "unknown";
+                        const parts = accEmail.split('@');
+                        const prefix = parts[0] || "user";
+                        const domain = parts[1] || "domain";
+
+                        const cpaData = {
+                            ...acc.token_data,
+                            email: accEmail,
+                            password: acc.password
+                        };
+                        cpaFolder.file(`token_${prefix}_${domain}_${timestamp + index}.json`, JSON.stringify(cpaData, null, 4));
+
+                        const proxyObj = proxyPool.length ? proxyPool[index % proxyPool.length] : null;
+                        const accountNode = {
+                            name: accEmail.slice(0, 64),
+                            platform: "openai",
+                            type: "oauth",
+                            credentials: { refresh_token: acc.token_data.refresh_token || "" },
+                            concurrency: this.config?.sub2api_mode?.account_concurrency || 10,
+                            priority: this.config?.sub2api_mode?.account_priority || 1,
+                            rate_multiplier: this.config?.sub2api_mode?.account_rate_multiplier || 1.0,
+                            extra: { load_factor: this.config?.sub2api_mode?.account_load_factor || 10 }
+                        };
+
+                        if (proxyObj) {
+                            accountNode.proxy_key = proxyObj.proxy_key;
+                        }
+
+                        const sub2apiData = {
+                            exported_at: new Date().toISOString(),
+                            proxies: proxyObj ? [proxyObj] : [],
+                            accounts: [accountNode]
+                        };
+                        sub2apiFolder.file(`sub2api_${prefix}_${domain}_${timestamp + index}.json`, JSON.stringify(sub2apiData, null, 4));
+                    });
+
+                    const content = await zip.generateAsync({ type: "blob" });
+                    const url = window.URL.createObjectURL(content);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `OpenAI_Accounts_Bundle_${timestamp}.zip`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+
+                    this.showToast(`成功导出 ${allData.length} 个账号，并已自动注入 Sub2API 代理节点！`, 'success');
+                } else {
+                    this.showToast(data.message || '导出失败', 'error');
+                }
+            } catch (e) {
+                console.error(e);
+                this.showToast('导出异常，请检查网络或刷新页面', 'error');
+            }
+        },
+
+        async clearAllAccounts() {
+            const confirmed = await this.customConfirm('⚠️ 危险操作！确定要删除【账号库】中的所有已注册账号吗？此操作不可恢复。');
+            if (!confirmed) return;
+
+            try {
+                const res = await this.authFetch('/api/accounts/clear_all', { method: 'POST' });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    this.showToast('账号库已全部清空', 'success');
+                    this.fetchAccounts();
+                } else {
+                    this.showToast(data.message, 'error');
+                }
+            } catch (e) {
+                this.showToast('清空异常', 'error');
+            }
+        },
+        async exportAllMailboxes() {
+            try {
+                const res = await this.authFetch('/api/mailboxes/export_all', { method: 'POST' });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    const allData = data.data;
+                    if (allData.length === 0) {
+                        this.showToast('邮箱库是空的，无需导出', 'warning');
+                        return;
+                    }
+                    const text = allData.map(m =>
+                        `${m.email}----${m.password}----${m.client_id || ''}----${m.refresh_token || ''}`
+                    ).join('\n');
+
+                    const blob = new Blob([text], { type: 'text/plain' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `Mailboxes_Backup_${new Date().getTime()}.txt`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+
+                    this.showToast(`成功导出 ${allData.length} 个邮箱`, 'success');
+                } else {
+                    this.showToast(data.message || '导出失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('导出异常', 'error');
+            }
+        },
+        async clearAllMailboxes() {
+            const confirmed = await this.customConfirm('⚠️ 危险操作！确定要删除【微软邮箱库】中的所有数据吗？');
+            if (!confirmed) return;
+
+            try {
+                const res = await this.authFetch('/api/mailboxes/clear_all', { method: 'POST' });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    this.showToast('邮箱库已全部清空', 'success');
+                    this.fetchMailboxes();
+                } else {
+                    this.showToast(data.message, 'error');
+                }
+            } catch (e) {
+                this.showToast('清空异常', 'error');
+            }
+        },
+        parseSub2ApiProxy(proxyUrl) {
+            if (!proxyUrl) return null;
+            try {
+                let parseUrl = proxyUrl;
+                const originalProtocol = proxyUrl.split('://')[0];
+                if (originalProtocol && !['http', 'https', 'socks4', 'socks5'].includes(originalProtocol)) {
+                     parseUrl = proxyUrl.replace(originalProtocol + '://', 'http://');
+                }
+
+                const url = new URL(parseUrl);
+                const protocol = originalProtocol || url.protocol.replace(':', '');
+                const host = url.hostname;
+                const port = url.port;
+                const username = decodeURIComponent(url.username || '');
+                const password = decodeURIComponent(url.password || '');
+
+                if (!protocol || !host || !port) return null;
+
+                const proxyKey = `${protocol}|${host}|${port}|${username}|${password}`;
+                const proxyDict = {
+                    proxy_key: proxyKey,
+                    name: "openai-cpa",
+                    protocol: protocol,
+                    host: host,
+                    port: parseInt(port),
+                    status: "active"
+                };
+                if (username && password) {
+                    proxyDict.username = username;
+                    proxyDict.password = password;
+                }
+                return proxyDict;
+            } catch (e) {
+                return null;
+            }
+        },
+        buildSub2ApiProxyPool(rawValue) {
+            const rawItems = Array.isArray(rawValue)
+                ? rawValue
+                : String(rawValue || '').replace(/\r/g, '\n').split('\n');
+
+            const proxyPool = [];
+            const seen = new Set();
+            rawItems.forEach(item => {
+                const value = String(item || '').trim();
+                if (!value || seen.has(value)) return;
+                seen.add(value);
+
+                const proxyObj = this.parseSub2ApiProxy(value);
+                if (proxyObj) {
+                    proxyPool.push(proxyObj);
+                }
+            });
+            return proxyPool;
         },
     }
 }).mount('#app');

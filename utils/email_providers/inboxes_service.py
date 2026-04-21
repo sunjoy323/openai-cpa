@@ -39,3 +39,14 @@ class InboxesService:
         except Exception:
             pass
         return []
+
+    def get_message_body(self, uid: str, user_id: str) -> str:
+        url = f"https://inboxes.com/read/{uid}"
+        cookies = {"user_id": user_id}
+        try:
+            res = self.session.get(url, headers=self.headers, cookies=cookies, timeout=10)
+            if res.status_code == 200:
+                return res.text
+        except Exception:
+            pass
+        return ""
