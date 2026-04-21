@@ -528,7 +528,7 @@ async def export_sub2api_accounts(req: ExportReq, token: str = Depends(verify_to
 
 
 @router.get("/api/cloud/accounts")
-def get_cloud_accounts(types: str = "sub2api,cpa", page: int = Query(1), page_size: int = Query(50),
+def get_cloud_accounts(types: str = "sub2api,cpa", status_filter: str = Query("all"), page: int = Query(1), page_size: int = Query(50),
                        token: str = Depends(verify_token)):
     type_list = types.split(",")
     combined_data = []
@@ -569,7 +569,8 @@ def get_cloud_accounts(types: str = "sub2api,cpa", page: int = Query(1), page_si
                                           "credential": item.get("name", "").replace(".json", ""),
                                           "status": "disabled" if item.get("disabled", False) else "active",
                                           "details": {}, "last_check": "-"})
-
+        if status_filter != "all":
+            combined_data = [item for item in combined_data if item.get("status") == status_filter]
         return {"status": "success", "data": combined_data[(page - 1) * page_size: page * page_size],
                 "total": len(combined_data)}
     except Exception as e:
@@ -644,6 +645,7 @@ def process_cloud_action(req: CloudActionReq, token: str = Depends(verify_token)
             if details: updated_details_map[acc_id] = details
 
     msg = f"测活完毕 | 存活: {success_count} 个 | 失效并已自动禁用: {fail_count} 个" if req.action == "check" else f"指令已下发 | 成功: {success_count} 个 | 失败: {fail_count} 个"
+
     return {"status": "success" if fail_count == 0 else "warning", "message": msg,
             "updated_details": updated_details_map}
 

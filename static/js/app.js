@@ -170,6 +170,7 @@ createApp({
                 suffix_len_min: 8,
                 suffix_len_max: 12
             },
+            cloudStatusFilter: 'all',
         };
     },
     mounted() {
@@ -1487,7 +1488,7 @@ createApp({
             }
             const types = this.cloudFilters.join(',');
             try {
-                const res = await this.authFetch(`/api/cloud/accounts?types=${types}&page=${this.cloudPage}&page_size=${this.cloudPageSize}`);
+                const res = await this.authFetch(`/api/cloud/accounts?types=${types}&status_filter=${this.cloudStatusFilter}&page=${this.cloudPage}&page_size=${this.cloudPageSize}`);
                 const data = await res.json();
                 if(data.status === 'success') {
                     this.cloudAccounts = (data.data || []).map(acc => ({
