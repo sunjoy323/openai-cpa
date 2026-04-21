@@ -670,8 +670,8 @@ def _extract_otp_code(content: str) -> str:
     if not content:
         return ""
     patterns = [
-        r"(?i)Your ChatGPT code is\s*(\d{6})",
-        r"(?i)ChatGPT code is\s*(\d{6})",
+        r"(?i)Your (?:ChatGPT|OpenAI) code is\s*(\d{6})",
+        r"(?i)(?:ChatGPT|OpenAI) code is\s*(\d{6})",
         r"(?i)verification code to continue:\s*(\d{6})",
         r"(?i)Subject:.*?(\d{6})",
         r"(?i)enter this code:\s*(\d{6})",
@@ -788,7 +788,7 @@ def get_oai_code(
                     subject = str(m.get("subject", ""))
                     sender = str(m.get("from", "")).lower()
 
-                    if "openai" in sender or "openai" in subject.lower() or "chatgpt" in subject:
+                    if "openai" in sender or "openai" in subject.lower() or "chatgpt" in subject.lower():
                         raw_body = fs.get_message_body(email, m_id)
                         clean_body = re.sub(r'<[^>]+>', ' ', raw_body)
                         combined_text = subject + " \n " + clean_body
@@ -800,7 +800,7 @@ def get_oai_code(
                         if new_format:
                             code = new_format[-1]
                         else:
-                            direct = re.findall(r"Your ChatGPT code is (\d{6})", combined_text, re.I)
+                            direct = re.findall(r"Your (?:ChatGPT|OpenAI) code is (\d{6})", combined_text, re.I)
                             if direct:
                                 code = direct[-1]
                             else:
@@ -830,7 +830,7 @@ def get_oai_code(
                         detail = tm_service.get_email_detail(m_id)
                         subject = str(detail.get("subject", ""))
                         a = detail.get("id", "")
-                        if "openai" in sender or "openai" in subject.lower() or "chatgpt" in subject:
+                        if "openai" in sender or "openai" in subject.lower() or "chatgpt" in subject.lower():
                             raw_body = tm_service.get_message_body(detail.get("id", ""))
                             clean_body = re.sub(r'<[^>]+>', ' ', raw_body)
                             combined_text = subject + " \n " + clean_body
@@ -844,7 +844,7 @@ def get_oai_code(
                             if new_format:
                                 code = new_format[-1]
                             else:
-                                direct = re.findall(r"Your ChatGPT code is (\d{6})", combined_text, re.I)
+                                direct = re.findall(r"Your (?:ChatGPT|OpenAI) code is (\d{6})", combined_text, re.I)
                                 if direct:
                                     code = direct[-1]
                                 else:
@@ -873,7 +873,7 @@ def get_oai_code(
                         subject = str(m.get("s", ""))
                         sender = str(m.get("f", "")).lower()
 
-                        if "openai" in sender or "openai" in subject.lower() or "chatgpt" in subject:
+                        if "openai" in sender or "openai" in subject.lower() or "chatgpt" in subject.lower():
                             raw_body = ibs.get_message_body(m_id, user_id=jwt)
                             clean_body = re.sub(r'<[^>]+>', ' ', raw_body)
 
@@ -888,7 +888,7 @@ def get_oai_code(
                             if new_format:
                                 code = new_format[-1]
                             else:
-                                direct = re.findall(r"Your ChatGPT code is (\d{6})", combined_text, re.I)
+                                direct = re.findall(r"Your (?:ChatGPT|OpenAI) code is (\d{6})", combined_text, re.I)
                                 if direct:
                                     code = direct[-1]
                                 else:
@@ -942,7 +942,7 @@ def get_oai_code(
                             if new_format:
                                 code = new_format[-1]
                             else:
-                                direct = re.findall(r"Your ChatGPT code is (\d{6})", combined_text, re.I)
+                                direct = re.findall(r"Your (?:ChatGPT|OpenAI) code is (\d{6})", combined_text, re.I)
                                 if direct:
                                     code = direct[-1]
                                 else:
@@ -1042,7 +1042,7 @@ def get_oai_code(
                             if new_format:
                                 code = new_format[-1]
                             else:
-                                direct = re.findall(r"Your ChatGPT code is (\d{6})", combined_text, re.I)
+                                direct = re.findall(r"Your (?:ChatGPT|OpenAI) code is (\d{6})", combined_text, re.I)
                                 if direct:
                                     code = direct[-1]
                                 else:

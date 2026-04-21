@@ -92,11 +92,13 @@ class PostmanFleet:
                     if new_format:
                         code = new_format[-1]
                     else:
-                        direct = re.findall(r"Your ChatGPT code is (\d{6})", body, re.I)
+                        direct = re.findall(r"Your (?:ChatGPT|OpenAI) code is (\d{6})", body, re.I)
                         if direct:
                             code = direct[-1]
                         else:
-                            if "ChatGPT" in subject or "OpenAI" in subject or "ChatGPT" in body:
+                            subject_lower = subject.lower()
+                            body_lower = body.lower()
+                            if "chatgpt" in subject_lower or "openai" in subject_lower or "chatgpt" in body_lower or "openai" in body_lower:
                                 generic = re.findall(r"\b(\d{6})\b", body)
                                 if generic:
                                     code = generic[-1]
