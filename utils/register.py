@@ -1209,7 +1209,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
 
                             next_url = str(code2_resp.json().get("continue_url") or "").strip()
                             resp, current_url = _follow_redirect_chain_local(s_log, next_url, proxies)
-                            url_code = ""
+                    url_code = ""
                     while True:
                         if "code=" in current_url:
                             return submit_callback_url(
