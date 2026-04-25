@@ -38,6 +38,7 @@ class EmailWebhookReq(BaseModel):
     message_id: str
     to_addr: str
     raw_content: str
+    from_addr: Optional[str] = None
 
 class LoginData(BaseModel): password: str
 class ClusterUploadAccountsReq(BaseModel): node_name: str; secret: str; accounts: list
@@ -133,9 +134,8 @@ async def start_task(token: str = Depends(verify_token)):
 
     default_proxy = getattr(core_engine.cfg, 'DEFAULT_PROXY', None)
     args = DummyArgs(proxy=default_proxy if default_proxy else None)
-    core_engine.run_stats.update({"success": 0, "failed": 0, "retries": 0, "pwd_blocked": 0, "phone_verify": 0, "start_time": time.time()})
+    core_engine.run_stats.update({"success": 0, "failed": 0, "retries": 0, "pwd_blocked": 0, "phone_verify": 0, "start_time": time.time(),"target": 0})
     if getattr(core_engine.cfg, 'ENABLE_CPA_MODE', False):
-        core_engine.run_stats["target"] = 0
         engine.start_cpa(args)
         return {"status": "success", "message": "启动成功：已自动识别并开启 [CPA 智能仓管模式]"}
     elif getattr(core_engine.cfg, 'ENABLE_SUB2API_MODE', False):

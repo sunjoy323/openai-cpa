@@ -185,7 +185,7 @@ createApp({
             isLoadingFivesimBalance: false,
             fivesimPrices: [],
             isLoadingFivesimPrices: false,
-
+            isRestarting: false,
         };
     },
     watch: {
@@ -290,8 +290,10 @@ createApp({
             }
             const res = await fetch(url, options);
             if (res.status === 401) {
-                this.logout();
-                this.showToast("登录状态过期，请重新登录！", "warning");
+                if (this.isLoggedIn && !this.isRestarting) {
+                    this.logout();
+                    this.showToast("登录状态过期，请重新登录！", "warning");
+                }
                 throw new Error("Unauthorized");
             }
             return res;
@@ -640,6 +642,7 @@ createApp({
             this.fetchAccounts(false);
         },
         switchTab(tabId) {
+            if (!this.isLoggedIn) return;
             this.currentTab = tabId;
             window.location.hash = tabId;
 			if (tabId === 'console') {
@@ -1552,6 +1555,7 @@ createApp({
 
             try {
                 this.showToast("🚀 正在向服务器发送重启指令...", "info");
+                this.isRestarting = true;
                 const res = await this.authFetch('/api/system/restart', { method: 'POST' });
                 const data = await res.json();
 
@@ -1559,14 +1563,17 @@ createApp({
                     this.showToast("✅ 系统正在重启，网页将于 6 秒后自动刷新...", "success");
                     if(this.statsTimer) clearInterval(this.statsTimer);
                     if(this.evtSource) this.evtSource.close();
+                    if(this.cfStatusTimer) clearInterval(this.cfStatusTimer);
 
                     setTimeout(() => {
                         window.location.reload();
                     }, 6000);
                 } else {
+                    this.isRestarting = false;
                     this.showToast(data.message || "重启指令发送失败", "error");
                 }
             } catch (e) {
+                this.isRestarting = false;
                 this.showToast("请求异常，请检查后端状态", "error");
             }
         },
@@ -1654,8 +1661,6 @@ createApp({
         },
 
         async fetchCloudAccounts() {
-            if (!this.config || !this.config.sub2api_mode.enable) return;
-            if (!this.config || !this.this.config.cpa_mode.enable) return;
             if (this.cloudFilters.length === 0) {
                 this.cloudAccounts = [];
                 this.cloudTotal = 0;
@@ -1685,7 +1690,9 @@ createApp({
                 }
             } catch (e) {
                 console.error(e);
-                this.showToast("获取云端数据失败", "error");
+                if (this.isLoggedIn && e.message !== "Unauthorized") {
+                    this.showToast("获取云端数据失败", "error");
+                }
             }
         },
 

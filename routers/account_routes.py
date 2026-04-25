@@ -240,7 +240,7 @@ def get_cloud_accounts(types: str = "sub2api,cpa", status_filter: str = Query("a
             "total": total_count
         }
     except Exception as e:
-        return {"status": "error", "message": f"拉取远端数据失败: {str(e)}"}
+        return {"status": "error", "message": f"拉取云端库存数据失败，请检查网络或者URL和KEY是否填写正确"}
 
 
 @router.post("/api/cloud/action")
