@@ -430,7 +430,9 @@ def cluster_upload_accounts(req: ClusterUploadAccountsReq):
 @router.get("/api/ext/generate_task")
 def ext_generate_task(token: str = Depends(verify_token)):
     from utils.email_providers.mail_service import mask_email, get_email_and_token, clear_sticky_domain
-    from utils.register import _generate_password, generate_random_user_info, generate_oauth_url
+    from utils.auth_pipeline.user_utils import generate_random_user_info, _generate_password
+    from utils.auth_pipeline.oauth import generate_oauth_url
+
     import utils.config as cfg
     import time
     print(f"[{cfg.ts()}] [INFO] 正在进行插件古法注册模式，请稍后...")

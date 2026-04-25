@@ -22,7 +22,7 @@ function normalizeBooleanLike(value, defaultValue = false) {
 createApp({
     data() {
         return {
-            appVersion: 'v12.1.1',
+            appVersion: 'v12.1.2',
             isLoggedIn: !!localStorage.getItem('auth_token'),
             loginPassword: '',
             currentTab: window.location.hash.replace('#', '') || 'console',
