@@ -76,6 +76,8 @@ cloudmail:
   #管理员邮箱
   admin_email: "admin@your-domain.com"
   admin_password: "你的管理员密码"
+  enable_local_webhook: false
+  webhook_secret: ""
 
 # [模式 "mail_curl" 专属配置]
 mail_curl:

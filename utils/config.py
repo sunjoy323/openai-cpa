@@ -208,6 +208,8 @@ FREEMAIL_WEBHOOK_SECRET: str = ""
 CM_API_URL: str = ""
 CM_ADMIN_EMAIL: str = ""
 CM_ADMIN_PASS: str = ""
+CM_LOCAL_WEBHOOK: bool = False
+CM_WEBHOOK_SECRET: str = ""
 MC_API_BASE: str = ""
 MC_KEY: str = ""
 DEFAULT_PROXY: str = ""
@@ -389,7 +391,7 @@ def reload_all_configs(new_config_dict=None):
     global ENABLE_SUB_DOMAINS, SUB_DOMAIN_COUNT
     global IMAP_SERVER, IMAP_PORT, IMAP_USER, IMAP_PASS
     global FREEMAIL_API_URL, FREEMAIL_API_TOKEN, FREEMAIL_LOCAL_WEBHOOK, FREEMAIL_WEBHOOK_SECRET
-    global CM_API_URL, CM_ADMIN_EMAIL, CM_ADMIN_PASS
+    global CM_API_URL, CM_ADMIN_EMAIL, CM_ADMIN_PASS, CM_LOCAL_WEBHOOK, CM_WEBHOOK_SECRET
     global MC_API_BASE, MC_KEY
     global DEFAULT_PROXY
     global SUB_DOMAIN_LEVEL, RANDOM_SUB_DOMAIN_LEVEL
@@ -585,6 +587,8 @@ def reload_all_configs(new_config_dict=None):
     CM_API_URL = str(_cm.get("api_url", "")).strip().rstrip("/")
     CM_ADMIN_EMAIL = _cm.get("admin_email", "")
     CM_ADMIN_PASS = _cm.get("admin_password", "")
+    CM_LOCAL_WEBHOOK = bool(_cm.get("enable_local_webhook", False))
+    CM_WEBHOOK_SECRET = str(_cm.get("webhook_secret", ""))
 
     _mc = _c.get("mail_curl", {})
     MC_API_BASE = str(_mc.get("api_base", "")).strip().rstrip("/")

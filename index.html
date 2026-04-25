@@ -1291,12 +1291,41 @@
                                             </button>
                                         </div>
                                     </div>
+
+                                    <div class="mt-6 py-4 border-t border-gray-200 dark:border-gray-700">
+                                        <div class="flex items-center justify-between">
+                                            <div>
+                                                <h4 class="text-sm font-medium">本项目极速接收邮件</h4>
+                                                <p class="text-xs opacity-70 mt-1">开启后将放弃查询worker，解决每日CF 10w限制问题，如果不需要开启该开关记得删除worker里的EMAIL_WEBHOOK_URL和EMAIL_WEBHOOK_SECRET变量。</p>
+                                            </div>
+                                            <label class="relative inline-flex items-center cursor-pointer">
+                                                <input type="checkbox" v-model="config.cloudmail.enable_local_webhook" class="sr-only peer">
+                                                <div class="w-11 h-6 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                            </label>
+                                        </div>
+
+                                        <div v-show="config.cloudmail.enable_local_webhook" class="mt-4 pt-4">
+                                            <label class="block text-sm font-medium mb-2 opacity-90">通信密钥 (EMAIL_WEBHOOK_SECRET)</label>
+                                            <div class="relative">
+                                                <input
+                                                    type="text"
+                                                    v-model="config.cloudmail.webhook_secret"
+                                                    placeholder="请输入高强度密钥..."
+                                                    class="w-full bg-transparent border border-gray-300 dark:border-gray-600 rounded-md py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-opacity-50 transition-colors"
+                                                >
+                                            </div>
+                                            <p class="mt-2 text-xs text-yellow-600 dark:text-yellow-500 flex items-center">
+                                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                                注意：该密钥对应worker里的EMAIL_WEBHOOK_SECRET变量，worker里的EMAIL_WEBHOOK_URL填http://ip:8000即可 也就是本项目访问地址，结尾不需要反斜杠，但是要保证http://ip:8000是公网能访问就行，而不是本地的127.0.0.1。
+                                            </p>
+                                        </div>
+                                    </div>
                                     <div class="text-[11px] text-rose-800 mt-4 font-bold bg-rose-50 border border-rose-100 p-3 rounded-lg leading-relaxed shadow-sm">
                                         <p class="mb-1">原版部署：</p>
                                         <a href="https://github.com/maillab/cloud-mail" class="text-blue-600 hover:text-blue-700 hover:underline break-all block" target="_blank">ithub.com/maillab/cloud-mail</a>
                                     </div>
                                     <div class="text-[11px] text-rose-800 mt-3 font-bold bg-rose-50 border border-rose-100 p-3 rounded-lg leading-relaxed shadow-sm">
-                                        <p class="mb-1 flex items-center gap-1"><span>⚠️</span> 若开启左边多级域名泛解析模式，必需部署魔改版：</p>
+                                        <p class="mb-1 flex items-center gap-1"><span>⚠️</span> 若开启左边多级域名泛解析模式或使用上面的解决每日CF 10w限制问题，必需部署魔改版：</p>
                                         <a href="https://github.com/wenfxl/cloud-mail" class="text-blue-600 hover:text-blue-700 hover:underline break-all block" target="_blank">github.com/wenfxl/cloud-mail</a>
                                     </div>
                                 </div>

@@ -537,24 +537,28 @@ def get_email_and_token(proxies: Any = None) -> tuple:
         print(f"[{cfg.ts()}] [AI-状态] 已开启 （{mask_email(email_str)}） AI 智能邮箱域名信息增强...")
 
     if mode == "cloudmail":
-        token = get_cm_token(mail_proxies)
-        if not token:
-            print(f"[{cfg.ts()}] [ERROR] 未能获取 CloudMail Token，跳过注册")
+        if getattr(cfg, 'CM_LOCAL_WEBHOOK', False):
+            print(f"[{cfg.ts()}] [INFO] 成功通过 本项目收件模式 cloudmail 指定创建邮箱: {mask_email(email_str)}")
+            return email_str, ""
+        else:
+            token = get_cm_token(mail_proxies)
+            if not token:
+                print(f"[{cfg.ts()}] [ERROR] 未能获取 CloudMail Token，跳过注册")
+                return None, None
+            try:
+                res = requests.post(
+                    f"{cfg.CM_API_URL}/api/public/addUser",
+                    headers={"Authorization": token},
+                    json={"list": [{"email": email_str}]},
+                    proxies=mail_proxies, timeout=15,
+                )
+                if res.json().get("code") == 200:
+                    print(f"[{cfg.ts()}] [INFO] CloudMail 成功创建邮箱: {mask_email(email_str)}")
+                    return email_str, ""
+                print(f"[{cfg.ts()}] [ERROR] CloudMail 邮箱创建失败: {res.text}")
+            except Exception as e:
+                print(f"[{cfg.ts()}] [ERROR] CloudMail 邮箱创建异常: {e}")
             return None, None
-        try:
-            res = requests.post(
-                f"{cfg.CM_API_URL}/api/public/addUser",
-                headers={"Authorization": token},
-                json={"list": [{"email": email_str}]},
-                proxies=mail_proxies, timeout=15,
-            )
-            if res.json().get("code") == 200:
-                print(f"[{cfg.ts()}] [INFO] CloudMail 成功创建邮箱: {mask_email(email_str)}")
-                return email_str, ""
-            print(f"[{cfg.ts()}] [ERROR] CloudMail 邮箱创建失败: {res.text}")
-        except Exception as e:
-            print(f"[{cfg.ts()}] [ERROR] CloudMail 邮箱创建异常: {e}")
-        return None, None
 
     if mode == "freemail":
         if getattr(cfg, 'FREEMAIL_LOCAL_WEBHOOK', False):
@@ -1030,50 +1034,73 @@ def get_oai_code(
             #         pass
 
             elif mode == "cloudmail":
-                token = get_cm_token(mail_proxies)
-                if token:
-                    res = requests.post(
-                        f"{cfg.CM_API_URL}/api/public/emailList",
-                        headers={"Authorization": token},
-                        json={"toEmail": email, "timeSort": "desc", "size": 10},
-                        proxies=mail_proxies, timeout=15,
-                    )
-                    if res.status_code == 200:
-                        for m in res.json().get("data", []):
-                            m_id = str(m.get("emailId"))
-                            if m_id in processed_mail_ids:
-                                continue
-                            sender = str(m.get("sendEmail", "")).lower()
-                            subject = str(m.get("subject", ""))
+                if getattr(cfg, 'CM_LOCAL_WEBHOOK', False):
+                    try:
+                        from routers.system_routes import code_pool
+                        target_email = email.lower().strip()
+                        if target_email in code_pool:
+                            raw_text = code_pool.pop(target_email, "")
+                            code = ""
+                            m = re.search(r"(?<!\d)(\d{6})(?!\d)", raw_text)
+                            if m:
+                                code = m.group(1)
 
-                            if "openai" not in sender and "openai" not in subject.lower() and "chatgpt" not in subject.lower():
-                                continue
-
-                            raw_body = str(m.get("content", "") or m.get("text", ""))
-
-                            clean_body = re.sub(r'<[^>]+>', ' ', raw_body)
-
-                            combined_text = subject + " \n " + clean_body
-                            code = None
-                            new_format = re.findall(r"enter this code:\s*(\d{6})", combined_text, re.I)
-                            if not new_format:
-                                new_format = re.findall(r"verification code to continue:\s*(\d{6})", combined_text,
-                                                        re.I)
-
-                            if new_format:
-                                code = new_format[-1]
-                            else:
-                                direct = re.findall(r"Your (?:ChatGPT|OpenAI) code is (\d{6})", combined_text, re.I)
-                                if direct:
-                                    code = direct[-1]
-                                else:
-                                    generic = re.findall(r"\b(\d{6})\b", combined_text)
-                                    if generic:
-                                        code = generic[-1]
+                            if not code:
+                                try:
+                                    code = _extract_otp_code(raw_text)
+                                except Exception:
+                                    pass
                             if code:
-                                processed_mail_ids.add(m_id)
-                                print(f"\n[{cfg.ts()}] [SUCCESS] CloudMail ({mask_email(email)})邮箱提取成功: {code}")
+                                print(f"[{cfg.ts()}] [SUCCESS] cloudmail (本项目极速) ({target_email}) 提取成功: {code}")
                                 return code
+
+                    except ImportError:
+                        print(f"[{cfg.ts()}] [ERROR] 无法导入内存池！")
+                else:
+                    token = get_cm_token(mail_proxies)
+                    if token:
+                        res = requests.post(
+                            f"{cfg.CM_API_URL}/api/public/emailList",
+                            headers={"Authorization": token},
+                            json={"toEmail": email, "timeSort": "desc", "size": 10},
+                            proxies=mail_proxies, timeout=15,
+                        )
+                        if res.status_code == 200:
+                            for m in res.json().get("data", []):
+                                m_id = str(m.get("emailId"))
+                                if m_id in processed_mail_ids:
+                                    continue
+                                sender = str(m.get("sendEmail", "")).lower()
+                                subject = str(m.get("subject", ""))
+
+                                if "openai" not in sender and "openai" not in subject.lower() and "chatgpt" not in subject.lower():
+                                    continue
+
+                                raw_body = str(m.get("content", "") or m.get("text", ""))
+
+                                clean_body = re.sub(r'<[^>]+>', ' ', raw_body)
+
+                                combined_text = subject + " \n " + clean_body
+                                code = None
+                                new_format = re.findall(r"enter this code:\s*(\d{6})", combined_text, re.I)
+                                if not new_format:
+                                    new_format = re.findall(r"verification code to continue:\s*(\d{6})", combined_text,
+                                                            re.I)
+
+                                if new_format:
+                                    code = new_format[-1]
+                                else:
+                                    direct = re.findall(r"Your (?:ChatGPT|OpenAI) code is (\d{6})", combined_text, re.I)
+                                    if direct:
+                                        code = direct[-1]
+                                    else:
+                                        generic = re.findall(r"\b(\d{6})\b", combined_text)
+                                        if generic:
+                                            code = generic[-1]
+                                if code:
+                                    processed_mail_ids.add(m_id)
+                                    print(f"\n[{cfg.ts()}] [SUCCESS] CloudMail ({mask_email(email)})邮箱提取成功: {code}")
+                                    return code
             elif mode == "duckmail":
                 duck_use_proxy = getattr(cfg, 'DUCK_USE_PROXY', True)
                 duck_proxies = proxies if duck_use_proxy else None
@@ -1421,12 +1448,9 @@ def get_oai_code(
                 if getattr(cfg, 'FREEMAIL_LOCAL_WEBHOOK', False):
                     try:
                         from routers.system_routes import code_pool
-
                         target_email = email.lower().strip()
-
                         if target_email in code_pool:
                             raw_text = code_pool.pop(target_email, "")
-
                             code = ""
                             m = re.search(r"(?<!\d)(\d{6})(?!\d)", raw_text)
                             if m:
