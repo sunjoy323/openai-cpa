@@ -25,3 +25,5 @@ utils/sentinel.py
 utils/auth_core/
 !utils/auth_core.pyd
 test.py
+aitest.py
+register.py.bak

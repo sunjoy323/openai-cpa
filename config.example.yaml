@@ -35,6 +35,9 @@ gptmail_base: "https://your-domain.com" #是后端访问链接，不是前端访
 # [模式 "cloudflare_temp_email" 专属配置]
 # 你的临时邮箱管理员密码
 admin_auth: ""
+# [项目专属内存池邮箱配置]
+openai_cpa:
+  webhook_secret: "wenfxl_secret_key"
 
 # [模式 "imap" 专属配置] (CF Catch-all 转发接收端)
 imap:
@@ -66,8 +69,8 @@ freemail:
   api_url: "https://your-domain.com"
   #JWTTOKEN
   api_token: ""
-  admin_username: 
-  admin_password: 
+  enable_local_webhook: false
+  webhook_secret: ""
 
 # [模式 "cloud-mail" 专属配置]
 cloudmail:
@@ -76,6 +79,8 @@ cloudmail:
   #管理员邮箱
   admin_email: "admin@your-domain.com"
   admin_password: "你的管理员密码"
+  enable_local_webhook: false
+  webhook_secret: ""
 
 # [模式 "mail_curl" 专属配置]
 mail_curl:
@@ -286,9 +291,41 @@ hero_sms:
   verify_on_register: false
   reuse_phone: true
   max_price: 0.08
+  min_price: 0.05
   min_balance: 1
   max_tries: 3
   poll_timeout_sec: 120
+  reuse_max: 2
+
+smsbower:
+  enabled: false
+  api_key:
+  base_url: https://smsbower.page/stubs/handler_api.php
+  country: 0
+  service: dr
+  auto_pick_country: false
+  verify_on_register: false
+  reuse_phone: true
+  max_price: 0.08
+  min_balance: 1
+  max_tries: 3
+  poll_timeout_sec: 120
+  reuse_max: 2
+
+fivesim:
+  enabled: false
+  api_key: ""
+  service: "openai"
+  country: "any"
+  auto_pick_country: true
+  verify_on_register: false
+  reuse_phone: true
+  max_price: 50.0
+  min_price: 0.0
+  min_balance: 10.0
+  max_tries: 3
+  poll_timeout_sec: 180
+  reuse_max: 2
 
 # 常规量产模式专属配置
 normal_mode:

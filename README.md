@@ -40,6 +40,13 @@ Install Python Dependencies Install the required base libraries using the requir
 ```bash
 pip install -r requirements.txt
 ```
+
+## ☕ Buy me a coffee
+
+If you find this tool helpful or if it has saved you time, consider buying me a coffee! Your support is a great motivation for continuous maintenance and updates.
+- ⚡ **Afdian:** [https://ifdian.net/a/wenfxl](https://ifdian.net/a/wenfxl)
+- 🪙 **USDT (TRX/Tron/TRC20):** `TLMNmyfUajfGSBhUfJ1orqxpvv7BWFnDqN`
+
 ## Web Console Preview
 
 <details>

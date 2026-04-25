@@ -380,20 +380,35 @@ def delete_accounts_by_emails(emails: list) -> bool:
         return False
 
 
-def get_accounts_page(page: int = 1, page_size: int = 50, hide_reg: str = "0") -> dict:
+def get_accounts_page(page: int = 1, page_size: int = 50, hide_reg: str = "0", search: str = None) -> dict:
     try:
         with get_db_conn() as conn:
             c = get_cursor(conn)
-            where_clause = ""
+            conditions = []
+            params = []
+
             if hide_reg == "1":
-                where_clause = " WHERE token_data NOT LIKE '%\"仅注册成功\"%'"
+                conditions.append("token_data NOT LIKE '%\"仅注册成功\"%'")
+            if search:
+                conditions.append("(email LIKE ? OR password LIKE ?)")
+                search_term = f"%{search}%"
+                params.extend([search_term, search_term])
+
+            where_clause = ""
+            if conditions:
+                where_clause = " WHERE " + " AND ".join(conditions)
             count_sql = f"SELECT COUNT(1) FROM accounts{where_clause}"
-            execute_sql(c, count_sql)
+            if params:
+                execute_sql(c, count_sql, tuple(params))
+            else:
+                execute_sql(c, count_sql)
             total = c.fetchone()[0]
 
             offset = (page - 1) * page_size
             data_sql = f"SELECT email, password, created_at, token_data FROM accounts{where_clause} ORDER BY id DESC LIMIT ? OFFSET ?"
-            execute_sql(c, data_sql, (page_size, offset))
+
+            data_params = tuple(params + [page_size, offset])
+            execute_sql(c, data_sql, data_params)
             rows = c.fetchall()
 
             data = [
@@ -407,6 +422,7 @@ def get_accounts_page(page: int = 1, page_size: int = 50, hide_reg: str = "0") -
                 for r in rows
             ]
             return {"total": total, "data": data}
+
     except Exception as e:
         print(f"[{cfg.ts()}] [ERROR] 分页获取账号列表失败: {e}")
         return {"total": 0, "data": []}
@@ -494,20 +510,39 @@ def import_local_mailboxes(mailboxes_data: list) -> int:
     return count
 
 
-def get_local_mailboxes_page(page: int = 1, page_size: int = 50) -> dict:
+def get_local_mailboxes_page(page: int = 1, page_size: int = 50, search: str = None) -> dict:
     try:
         # as_dict=True 通知游标返回字典格式，适配原来的 sqlite3.Row
         with get_db_conn(as_dict=True) as conn:
             c = get_cursor(conn, as_dict=True)
-            execute_sql(c, "SELECT COUNT(1) AS cnt FROM local_mailboxes")
+            conditions = []
+            params = []
+
+            if search:
+                conditions.append("(email LIKE ?)")
+                search_term = f"%{search}%"
+                params.extend([search_term])
+
+            where_clause = ""
+            if conditions:
+                where_clause = " WHERE " + " AND ".join(conditions)
+            count_sql = f"SELECT COUNT(1) AS cnt FROM local_mailboxes{where_clause}"
+            if params:
+                execute_sql(c, count_sql, tuple(params))
+            else:
+                execute_sql(c, count_sql)
+
             total_row = c.fetchone()
             total = total_row['cnt'] if DB_TYPE == "mysql" else total_row[0]
-
             offset = (page - 1) * page_size
-            execute_sql(c, "SELECT * FROM local_mailboxes ORDER BY id DESC LIMIT ? OFFSET ?", (page_size, offset))
+            data_sql = f"SELECT * FROM local_mailboxes{where_clause} ORDER BY id DESC LIMIT ? OFFSET ?"
+            data_params = tuple(params + [page_size, offset])
+            execute_sql(c, data_sql, data_params)
             rows = c.fetchall()
+
             return {"total": total, "data": [dict(r) for r in rows]}
     except Exception as e:
+        print(f"[ERROR] 分页获取邮箱库列表失败: {e}")
         return {"total": 0, "data": []}
 
 

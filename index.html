@@ -99,13 +99,16 @@
             <aside class="w-full md:w-64 h-auto md:h-full bg-slate-100/70 backdrop-blur-3xl text-slate-600 flex flex-col shadow-[inset_-1px_0_0_rgba(0,0,0,0.06)] z-20 shrink-0 border-r border-slate-200/50">
                 <div class="p-4 md:p-6 flex items-center justify-between md:justify-center border-b border-slate-200/60 shrink-0 bg-transparent">
                     <span class="font-black text-base md:text-xl tracking-tight text-slate-800 drop-shadow-sm">Wenfxl <span class="text-indigo-500">Manager</span></span>
-                    <button v-if="updateInfo.hasUpdate" @click="promptUpdate" class="relative group flex items-center justify-center focus:outline-none transition-transform hover:scale-105 shrink-0 cursor-pointer" title="点击查看更新">
-                        <span class="absolute -top-1 -right-1 flex h-2.5 w-2.5 z-10">
-                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500"></span>
-                        </span>
-                        <span class="px-2.5 py-1 rounded-md bg-white border border-rose-200 text-[10px] text-rose-500 font-mono font-bold leading-none shadow-sm">
-                            🚀 {{ updateInfo.version }}
+                    <button v-if="updateInfo.hasUpdate" @click="promptUpdate" class="relative group flex items-center justify-center focus:outline-none shrink-0 cursor-pointer" title="发现新版本，点击查看！">
+                        <div class="absolute inset-0 bg-gradient-to-r from-rose-500 to-orange-500 blur-md opacity-50 group-hover:opacity-100 transition-opacity animate-pulse rounded-full"></div>
+                        <span class="relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-rose-500 via-red-500 to-orange-500 border border-white/30 text-white font-black leading-none shadow-[0_4px_10px_rgba(244,63,94,0.4)] transform group-hover:scale-105 transition-all duration-300">
+                            <span class="text-[12px]">🚀</span>
+                            <span class="text-[11px] tracking-wide drop-shadow-md">发现新版 {{ updateInfo.version }}</span>
+
+                            <span class="absolute -top-1.5 -right-1.5 flex h-3 w-3 z-10">
+                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-90"></span>
+                                <span class="relative inline-flex rounded-full h-3 w-3 bg-rose-100 border border-rose-500"></span>
+                            </span>
                         </span>
                     </button>
                     <span v-else class="px-2.5 py-1 rounded-md bg-white border border-slate-200 text-[10px] text-slate-500 font-mono font-bold leading-none shrink-0 shadow-sm">
@@ -416,6 +419,10 @@
                                 </div>
 
                                 <div class="flex flex-wrap gap-3 items-center w-full xl:w-auto">
+                                    <div class="relative flex items-center">
+                                        <span class="absolute left-3 text-slate-400 text-sm">🔍</span>
+                                        <input type="text" v-model="searchAccounts" placeholder="搜索本地账号..." class="pl-8 pr-3 py-1.5 w-32 md:w-48 text-sm bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition shadow-sm font-medium">
+                                    </div>
                                     <button @click="showAccountsPlaintext = !showAccountsPlaintext" class="text-sm bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-50 active:scale-95 transition shadow-sm font-bold flex items-center gap-1">
                                         <span>{{ showAccountsPlaintext ? '🙈' : '👁️' }}</span> {{ showAccountsPlaintext ? '脱敏' : '明文' }}
                                     </button>
@@ -510,6 +517,15 @@
                                     </select>
                                 </div>
                                 <div class="flex gap-2 w-full md:w-auto justify-between md:justify-end">
+                                    <div class="flex items-center gap-1 bg-white border border-slate-200 rounded-xl px-2 shadow-sm mr-1 h-[38px] focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 transition-all">
+                                        <span class="text-xs text-slate-400 font-bold">前往</span>
+                                        <input type="number"
+                                               :placeholder="currentPage"
+                                               @change="if($event.target.value) changePage(parseInt($event.target.value)); $event.target.value='';"
+                                               @keyup.enter="$event.target.blur()"
+                                               class="w-10 text-center text-sm font-bold text-slate-700 placeholder:text-slate-700 border-none focus:ring-0 p-0 m-0 bg-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none">
+                                        <span class="text-xs text-slate-400 font-bold">页</span>
+                                    </div>
                                     <button @click="changePage(currentPage - 1)" :disabled="currentPage <= 1" class="px-4 py-2 rounded-xl text-sm font-bold bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all active:scale-95">
                                         上一页
                                     </button>
@@ -644,6 +660,10 @@
                                 </div>
 
                                 <div class="flex flex-wrap gap-3 items-center w-full xl:w-auto">
+                                    <div class="relative flex items-center">
+                                        <span class="absolute left-3 text-slate-400 text-sm">🔍</span>
+                                        <input type="text" v-model="searchMailboxes" placeholder="搜索微软邮箱..." class="pl-8 pr-3 py-1.5 w-32 md:w-48 text-sm bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition shadow-sm font-medium">
+                                    </div>
                                     <button @click="showImportMailboxModal = true" class="text-sm bg-sky-50 text-sky-600 border border-sky-200 px-3 py-1.5 rounded-lg hover:bg-sky-100 active:scale-95 transition shadow-sm font-bold flex items-center gap-1">
                                         📥 导入数据
                                     </button>
@@ -669,7 +689,7 @@
                                 <table class="min-w-full divide-y divide-slate-100">
                                     <thead class="bg-slate-50/80">
                                         <tr>
-                                            <th class="px-5 md:px-8 py-4 text-left w-12"><input type="checkbox" @change="toggleAllMailboxes" :checked="selectedMailboxes.length === mailboxes.length && mailboxes.length > 0" class="form-checkbox w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"></th>
+                                            <th class="px-5 md:px-8 py-4 text-left w-12"><input type="checkbox" @change="toggleAllMailboxes" :checked="selectedMailboxes.length === filteredMailboxes.length && filteredMailboxes.length > 0" class="form-checkbox w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"></th>
                                             <th class="px-5 md:px-8 py-4 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest w-16">#</th>
                                             <th class="px-5 md:px-8 py-4 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest">邮箱账号</th>
                                             <th class="px-5 md:px-8 py-4 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest">鉴权类型</th>
@@ -680,10 +700,10 @@
                                         </tr>
                                     </thead>
                                     <tbody class="bg-white divide-y divide-slate-50">
-                                        <tr v-if="mailboxes.length === 0">
+                                        <tr v-if="filteredMailboxes.length === 0">
                                             <td colspan="6" class="px-6 py-16 text-center text-slate-400 font-medium bg-slate-50/30">暂无邮箱数据，请点击右上角导入</td>
                                         </tr>
-                                        <tr v-for="(mb, index) in mailboxes" :key="index" class="hover:bg-slate-50 transition duration-200">
+                                        <tr v-for="(mb, index) in filteredMailboxes" :key="index" class="hover:bg-slate-50 transition duration-200">
                                             <td class="px-5 md:px-8 py-4 whitespace-nowrap"><input type="checkbox" :value="mb" v-model="selectedMailboxes" class="form-checkbox w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"></td>
                                             <td class="px-5 md:px-8 py-4 whitespace-nowrap text-sm text-slate-400 font-mono font-medium">{{ index + 1 }}</td>
                                             <td class="px-5 md:px-8 py-4 whitespace-nowrap text-sm font-bold text-slate-700">
@@ -727,6 +747,15 @@
                                     </select>
                                 </div>
                                 <div class="flex gap-2">
+                                    <div class="flex items-center gap-1 bg-white border border-slate-200 rounded-xl px-2 shadow-sm mr-1 h-[38px] focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 transition-all">
+                                        <span class="text-xs text-slate-400 font-bold">前往</span>
+                                        <input type="number"
+                                               :placeholder="mailboxPage"
+                                               @change="if($event.target.value) changeMailboxPage(parseInt($event.target.value)); $event.target.value='';"
+                                               @keyup.enter="$event.target.blur()"
+                                               class="w-10 text-center text-sm font-bold text-slate-700 placeholder:text-slate-700 border-none focus:ring-0 p-0 m-0 bg-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none">
+                                        <span class="text-xs text-slate-400 font-bold">页</span>
+                                    </div>
                                     <button @click="changeMailboxPage(mailboxPage - 1)" :disabled="mailboxPage <= 1" class="px-4 py-2 rounded-xl text-sm font-bold bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50">上一页</button>
                                     <button @click="changeMailboxPage(mailboxPage + 1)" :disabled="mailboxPage >= mailboxTotalPages" class="px-4 py-2 rounded-xl text-sm font-bold bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50">下一页</button>
                                 </div>
@@ -743,6 +772,7 @@
                                     <option value="local_microsoft">本地微软邮箱库</option>
                                     <option value="gmail_fission">Gmail OAuth裂变</option>
                                     <option value="Gmail_OAuth">Gmail_OAuth授权(cf转发gmail直接选此模式收件)</option>
+                                    <option value="openai_cpa">OpenAI-CPA 内存池</option>
                                     <option value="freemail">freemail</option>
                                     <option value="cloudmail">cloudmail</option>
                                     <option value="mail_curl">mail_curl</option>
@@ -810,12 +840,12 @@
                                             <h4 class="text-sm font-black text-blue-800 tracking-wide">多级域名泛解析模式</h4>
                                             <p class="text-xs text-slate-500 mt-1 font-medium">开启后将自动使用指定域名层级。</p>
                                             <p class="text-[11px] text-slate-400 mt-1">第一次使用请填写好上方发信域名池后点击下方推送按钮，如果加入新主域也要点推送，推送只需要一次永久生效</p>
-                                            <p v-if="!['freemail', 'imap', 'cloudflare_temp_email', 'cloudmail', 'Gmail_OAuth'].includes(config.email_api_mode)" class="text-[11px] font-bold text-rose-600 mt-3 bg-rose-50 px-3 py-2 rounded-lg inline-block border border-rose-100 shadow-sm flex items-center gap-1.5">
+                                            <p v-if="!['freemail', 'imap', 'cloudflare_temp_email', 'cloudmail', 'Gmail_OAuth', 'openai_cpa'].includes(config.email_api_mode)" class="text-[11px] font-bold text-rose-600 mt-3 bg-rose-50 px-3 py-2 rounded-lg inline-block border border-rose-100 shadow-sm flex items-center gap-1.5">
                                                 <span>⚠️</span> 当前模式不支持此功能！仅限 cloudflare_temp_email, freemail, imap, cloudmail。
                                             </p>
                                         </div>
-                                        <label class="relative inline-flex items-center shrink-0 mt-3 sm:mt-0" :class="['freemail', 'imap', 'cloudflare_temp_email', 'cloudmail', 'Gmail_OAuth'].includes(config.email_api_mode) ? 'cursor-pointer' : 'cursor-not-allowed opacity-50 grayscale'">
-                                            <input type="checkbox" v-model="config.enable_sub_domains" :disabled="!['freemail', 'imap', 'cloudflare_temp_email', 'cloudmail', 'Gmail_OAuth'].includes(config.email_api_mode)" class="sr-only peer">
+                                        <label class="relative inline-flex items-center shrink-0 mt-3 sm:mt-0" :class="['freemail', 'imap', 'cloudflare_temp_email', 'cloudmail', 'Gmail_OAuth', 'openai_cpa'].includes(config.email_api_mode) ? 'cursor-pointer' : 'cursor-not-allowed opacity-50 grayscale'">
+                                            <input type="checkbox" v-model="config.enable_sub_domains" :disabled="!['freemail', 'imap', 'cloudflare_temp_email', 'cloudmail', 'Gmail_OAuth', 'openai_cpa'].includes(config.email_api_mode)" class="sr-only peer">
                                             <div class="relative w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-blue-600 shadow-inner transition-colors duration-300"></div>
                                         </label>
                                     </div>
@@ -1116,8 +1146,41 @@
                                         </div>
                                     </div>
                                 </div>
+                                <div v-if="config.email_api_mode === 'openai_cpa' && config.openai_cpa" class="animate-fade-in space-y-4 mt-2">
+                                    <div class="flex items-center gap-2 mb-4">
+                                        <span class="text-xs font-black text-amber-800 bg-amber-100 px-3 py-1.5 rounded-md border border-amber-200 shadow-sm uppercase tracking-wider">当前模式</span>
+                                        <span class="text-sm font-black text-slate-700">OpenAI-CPA 专属极简内存池邮箱</span>
+                                    </div>
 
+                                    <div>
+                                        <label class="block text-slate-700 text-xs font-extrabold mb-1.5 uppercase tracking-wider">通信密钥 (EMAIL_WEBHOOK_SECRET)</label>
+                                        <div class="relative">
+                                            <input
+                                                :type="showPwd.openai_cpa ? 'text' : 'password'"
+                                                v-model="config.openai_cpa.webhook_secret"
+                                                class="w-full appearance-none bg-white border border-slate-200 text-slate-700 rounded-lg py-2.5 px-3 pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors shadow-sm font-mono text-sm placeholder:text-slate-300"
+                                                placeholder="请输入与 Worker 一致的高强度密钥..."
+                                            >
+                                            <button @click="showPwd.openai_cpa = !showPwd.openai_cpa" class="absolute right-3 top-1/2 -translate-y-1/2 text-lg text-slate-400 hover:text-indigo-600 focus:outline-none transition-transform hover:scale-110">
+                                                {{ showPwd.openai_cpa ? '👁️' : '🙈' }}
+                                            </button>
+                                        </div>
+                                    </div>
 
+                                    <div class="text-xs text-indigo-800 font-bold bg-indigo-50 border border-indigo-200 p-4 rounded-xl leading-relaxed shadow-sm mt-4">
+                                        <p class="flex items-center gap-1.5 text-sm"><span>⚡</span> 解决每日CF 10w限制问题，邮件内存储存60秒，阅后既焚，项目重启后会自动清空。</p>
+                                        <p class="mt-2 text-indigo-700 opacity-90">系统将自动开启本地服务接收，抛弃R2,D1,KV</p>
+                                        <p class="mt-3 text-rose-600 font-black bg-rose-50/50 p-2 rounded-lg border border-rose-100">
+                                            🔥 注意：请务必确保上方填写的密钥与 CF Worker 变量中的 <code>EMAIL_WEBHOOK_SECRET</code> 严格一致！
+                                        </p>
+                                        <div class="mt-3 pt-3 border-t border-indigo-200/50 flex flex-col sm:flex-row sm:items-center gap-1">
+                                            <span>🔗 openai-cpa专属邮箱项目地址：</span>
+                                            <a href="https://github.com/wenfxl/openai-cpa-email" target="_blank" class="text-blue-600 hover:text-blue-700 hover:underline font-bold transition-colors">
+                                                点击前往获取
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
                                 <div v-if="config.email_api_mode === 'fvia' && config.fvia" class="animate-fade-in space-y-4">
                                     <div class="flex items-center gap-2 mb-4">
                                         <span class="text-xs font-black text-amber-800 bg-amber-100 px-3 py-1.5 rounded-md border border-amber-200 shadow-sm uppercase tracking-wider">当前模式</span>
@@ -1278,6 +1341,36 @@
                                             </button>
                                         </div>
                                     </div>
+
+                                    <div class="mt-6 py-4 border-t border-gray-200 dark:border-gray-700">
+                                        <div class="flex items-center justify-between">
+                                            <div>
+                                                <h4 class="text-sm font-medium">本项目极速接收邮件</h4>
+                                                <p class="text-xs opacity-70 mt-1">开启后将放弃查询worker，解决每日CF 10w限制问题，如果不需要开启该开关记得删除worker里的EMAIL_WEBHOOK_URL和EMAIL_WEBHOOK_SECRET变量。</p>
+                                            </div>
+                                            <label class="relative inline-flex items-center cursor-pointer">
+                                                <input type="checkbox" v-model="config.freemail.enable_local_webhook" class="sr-only peer">
+                                                <div class="w-11 h-6 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                            </label>
+                                        </div>
+
+                                        <div v-show="config.freemail.enable_local_webhook" class="mt-4 pt-4">
+                                            <label class="block text-sm font-medium mb-2 opacity-90">通信密钥 (EMAIL_WEBHOOK_SECRET)</label>
+                                            <div class="relative">
+                                                <input
+                                                    type="text"
+                                                    v-model="config.freemail.webhook_secret"
+                                                    placeholder="请输入高强度密钥..."
+                                                    class="w-full bg-transparent border border-gray-300 dark:border-gray-600 rounded-md py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-opacity-50 transition-colors"
+                                                >
+                                            </div>
+                                            <p class="mt-2 text-xs text-yellow-600 dark:text-yellow-500 flex items-center">
+                                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                                注意：该密钥对应worker里的EMAIL_WEBHOOK_SECRET变量，worker里的EMAIL_WEBHOOK_URL填http://ip:8000即可 也就是本项目访问地址，结尾不需要反斜杠，但是要保证http://ip:8000是公网能访问就行，而不是本地的127.0.0.1。
+                                            </p>
+                                        </div>
+                                    </div>
+
                                     <div class="text-[11px] text-rose-800 mt-4 font-bold bg-rose-50 border border-rose-100 p-3 rounded-lg leading-relaxed shadow-sm">
                                         <p class="mb-1">必需部署魔改版才能使用该邮箱：</p>
                                         <a href="https://github.com/wenfxl/freemail" class="text-blue-600 hover:text-blue-700 hover:underline break-all block" target="_blank">github.com/wenfxl/freemail</a>
@@ -1326,12 +1419,41 @@
                                             </button>
                                         </div>
                                     </div>
+
+                                    <div class="mt-6 py-4 border-t border-gray-200 dark:border-gray-700">
+                                        <div class="flex items-center justify-between">
+                                            <div>
+                                                <h4 class="text-sm font-medium">本项目极速接收邮件</h4>
+                                                <p class="text-xs opacity-70 mt-1">开启后将放弃查询worker，解决每日CF 10w限制问题，如果不需要开启该开关记得删除worker里的EMAIL_WEBHOOK_URL和EMAIL_WEBHOOK_SECRET变量。</p>
+                                            </div>
+                                            <label class="relative inline-flex items-center cursor-pointer">
+                                                <input type="checkbox" v-model="config.cloudmail.enable_local_webhook" class="sr-only peer">
+                                                <div class="w-11 h-6 bg-gray-300 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                            </label>
+                                        </div>
+
+                                        <div v-show="config.cloudmail.enable_local_webhook" class="mt-4 pt-4">
+                                            <label class="block text-sm font-medium mb-2 opacity-90">通信密钥 (EMAIL_WEBHOOK_SECRET)</label>
+                                            <div class="relative">
+                                                <input
+                                                    type="text"
+                                                    v-model="config.cloudmail.webhook_secret"
+                                                    placeholder="请输入高强度密钥..."
+                                                    class="w-full bg-transparent border border-gray-300 dark:border-gray-600 rounded-md py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-opacity-50 transition-colors"
+                                                >
+                                            </div>
+                                            <p class="mt-2 text-xs text-yellow-600 dark:text-yellow-500 flex items-center">
+                                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                                注意：该密钥对应worker里的EMAIL_WEBHOOK_SECRET变量，worker里的EMAIL_WEBHOOK_URL填http://ip:8000即可 也就是本项目访问地址，结尾不需要反斜杠，但是要保证http://ip:8000是公网能访问就行，而不是本地的127.0.0.1。
+                                            </p>
+                                        </div>
+                                    </div>
                                     <div class="text-[11px] text-rose-800 mt-4 font-bold bg-rose-50 border border-rose-100 p-3 rounded-lg leading-relaxed shadow-sm">
                                         <p class="mb-1">原版部署：</p>
                                         <a href="https://github.com/maillab/cloud-mail" class="text-blue-600 hover:text-blue-700 hover:underline break-all block" target="_blank">ithub.com/maillab/cloud-mail</a>
                                     </div>
                                     <div class="text-[11px] text-rose-800 mt-3 font-bold bg-rose-50 border border-rose-100 p-3 rounded-lg leading-relaxed shadow-sm">
-                                        <p class="mb-1 flex items-center gap-1"><span>⚠️</span> 若开启左边多级域名泛解析模式，必需部署魔改版：</p>
+                                        <p class="mb-1 flex items-center gap-1"><span>⚠️</span> 若开启左边多级域名泛解析模式或使用上面的解决每日CF 10w限制问题，必需部署魔改版：</p>
                                         <a href="https://github.com/wenfxl/cloud-mail" class="text-blue-600 hover:text-blue-700 hover:underline break-all block" target="_blank">github.com/wenfxl/cloud-mail</a>
                                     </div>
                                 </div>
@@ -1678,9 +1800,15 @@
                         <div v-show="currentTab === 'sms'" v-if="config" class="space-y-5 md:space-y-8">
                             <div class="bg-white p-6 md:p-8 rounded-2xl shadow-sm hover:shadow-md transition-shadow duration-300 border border-slate-200/60 lg:col-span-2 border-t-4 border-t-orange-500 bg-gradient-to-b from-orange-50/30 to-white" v-if="config.hero_sms">
                                 <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 md:mb-8 border-b border-orange-100 pb-5 gap-4">
-                                    <h3 class="text-xl md:text-2xl font-black text-orange-600 tracking-tight flex items-center gap-2"><span>📱</span> HeroSMS 手机接码</h3>
+                                    <h3 class="text-xl md:text-2xl font-black text-orange-600 tracking-tight flex items-center flex-wrap gap-2">
+                                        <span>📱</span> HeroSMS 手机接码
+                                        <a href="https://hero-sms.com/" target="_blank" rel="noopener noreferrer" class="text-[10px] md:text-xs bg-orange-100 hover:bg-orange-200 text-orange-700 font-bold px-2 py-1 rounded-md sm:ml-2 transition-colors inline-flex items-center gap-1 border border-orange-200/60 shadow-sm">
+                                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                                            前往官网
+                                        </a>
+                                    </h3>
                                     <label class="relative inline-flex bg-white px-4 py-2.5 md:px-5 md:py-3 rounded-xl cursor-pointer hover:bg-orange-50 transition-colors shadow-sm border border-orange-200 w-full sm:w-auto items-center justify-center group">
-                                        <input type="checkbox" v-model="config.hero_sms.enabled" class="sr-only peer">
+                                        <input type="checkbox" v-model="config.hero_sms.enabled" @change="if(config.hero_sms.enabled) { config.smsbower.enabled = false; config.fivesim.enabled = false; }" class="sr-only peer">
                                         <div class="relative w-11 h-6 shrink-0 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-orange-500 shadow-inner transition-colors duration-300 group-hover:shadow-md"></div>
                                         <span class="font-black text-orange-900 text-sm md:text-base ml-3 tracking-wide">主开关：开启接码</span>
                                     </label>
@@ -1750,7 +1878,7 @@
                                         </div>
                                     </div>
 
-                                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-5 mt-2">
+                                    <div class="md:col-span-2 grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-5 mt-2">
                                         <div class="bg-orange-50/50 p-4 rounded-xl border border-orange-100">
                                             <label class="block text-[11px] text-orange-900 font-black mb-1 uppercase tracking-wider">余额触发下限 ($)</label>
                                             <span class="text-[10px] text-orange-500/80 block mb-3 font-medium">低于此值停止任务</span>
@@ -1782,12 +1910,289 @@
                                         <label class="relative inline-flex flex-1 items-center p-4 bg-white rounded-xl border border-orange-200 shadow-sm cursor-pointer hover:bg-orange-50 transition-colors group">
                                             <input type="checkbox" v-model="config.hero_sms.reuse_phone" class="sr-only peer">
                                             <div class="relative w-11 h-6 shrink-0 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-orange-500 shadow-inner transition-colors duration-300 group-hover:shadow-md"></div>
-                                            <span class="ml-4 text-sm font-black text-orange-900 tracking-wide">启用号码二次复用机制 <span class="text-xs font-medium text-orange-600/80 block mt-0.5">(省钱模式)</span></span>
+                                            <div class="ml-4 flex flex-col justify-center">
+                                                <span class="text-sm font-black text-orange-900 tracking-wide flex items-center gap-2">
+                                                    启用号码复用机制
+                                                    <span v-if="config.hero_sms.reuse_phone" class="inline-flex items-center gap-1 bg-orange-50/80 border border-orange-200 px-2 py-0.5 rounded text-xs font-mono shadow-sm">
+                                                        最多 <input type="number" v-model.number="config.hero_sms.reuse_max" class="w-10 bg-white border border-orange-200 text-center outline-none font-bold text-orange-700 rounded" min="1"> 次
+                                                    </span>
+                                                </span>
+                                                <span class="text-xs font-medium text-orange-600/80 mt-0.5">(开启后可在指定次数内反复拿号)</span>
+                                            </div>
                                         </label>
                                         <label class="relative inline-flex items-center p-4 bg-rose-50/50 rounded-xl border border-rose-200 shadow-sm cursor-pointer hover:bg-rose-100/50 transition-colors group">
                                             <input type="checkbox" v-model="config.hero_sms.verify_on_register" class="sr-only peer">
                                             <div class="relative w-11 h-6 shrink-0 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-rose-500 shadow-inner transition-colors duration-300 group-hover:shadow-md"></div>
                                             <span class="ml-4 text-sm font-black text-rose-900 tracking-wide">账号创建时接码 <span class="text-xs font-medium text-rose-600/80 block mt-0.5">(注: 仅创建拦截有效,非拿OAuth时)</span></span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="bg-white p-6 md:p-8 rounded-2xl shadow-sm hover:shadow-md transition-shadow duration-300 border border-slate-200/60 lg:col-span-2 border-t-4 border-t-indigo-500 bg-gradient-to-b from-indigo-50/30 to-white" v-if="config.smsbower">
+                                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 md:mb-8 border-b border-indigo-100 pb-5 gap-4">
+                                    <h3 class="text-xl md:text-2xl font-black text-indigo-600 tracking-tight flex items-center flex-wrap gap-2">
+                                        <span>🌐</span> SmsBower 手机接码
+                                        <a href="https://smsbower.app/" target="_blank" rel="noopener noreferrer" class="text-[10px] md:text-xs bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-bold px-2 py-1 rounded-md sm:ml-2 transition-colors inline-flex items-center gap-1 border border-indigo-200/60 shadow-sm">
+                                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                                            前往官网
+                                        </a>
+                                    </h3>
+
+
+<!--                                    <h3 class="text-xl md:text-2xl font-black text-indigo-600 tracking-tight flex items-center gap-2"><span>🌐</span> SmsBower 手机接码</h3>-->
+                                    <label class="relative inline-flex bg-white px-4 py-2.5 md:px-5 md:py-3 rounded-xl cursor-pointer hover:bg-indigo-50 transition-colors shadow-sm border border-indigo-200 w-full sm:w-auto items-center justify-center group">
+                                        <input type="checkbox" v-model="config.smsbower.enabled" @change="if(config.smsbower.enabled) { config.hero_sms.enabled = false; config.fivesim.enabled = false; }" class="sr-only peer">
+                                        <div class="relative w-11 h-6 shrink-0 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-indigo-500 shadow-inner transition-colors duration-300 group-hover:shadow-md"></div>
+                                        <span class="font-black text-indigo-900 text-sm md:text-base ml-3 tracking-wide">主开关：开启接码</span>
+                                    </label>
+                                </div>
+
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8" :class="{'opacity-50 pointer-events-none grayscale-[50%] transition-opacity duration-300': !config.smsbower.enabled}">
+                                    <div>
+                                        <label class="flex justify-between items-end text-xs md:text-sm text-indigo-900 font-black mb-2 uppercase tracking-wider">
+                                            <span>API Key</span>
+                                            <span class="text-indigo-600 bg-indigo-100 px-2 py-1 rounded-md border border-indigo-200 shadow-sm text-[10px] md:text-xs">余额: <span class="font-mono font-bold">{{ smsBowerBalance || '0.00' }}</span> USD</span>
+                                        </label>
+                                        <div class="flex gap-3">
+                                            <div class="relative flex-1">
+                                                <input :type="showPwd.smsbower_key ? 'text' : 'password'" v-model="config.smsbower.api_key" class="w-full appearance-none bg-white border border-indigo-200 text-slate-700 rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors shadow-sm text-sm font-mono placeholder:text-slate-300" placeholder="SmsBower API Key">
+                                                <button @click="showPwd.smsbower_key = !showPwd.smsbower_key" class="absolute right-3 top-1/2 -translate-y-1/2 text-lg text-slate-400 hover:text-indigo-600 focus:outline-none">
+                                                    {{ showPwd.smsbower_key ? '👁️' : '🙈' }}
+                                                </button>
+                                            </div>
+                                            <button @click="fetchSmsBowerBalance" :disabled="isLoadingSmsBowerBalance" class="px-4 bg-white text-indigo-600 rounded-xl hover:bg-indigo-50 active:scale-95 transition-all border border-indigo-200 flex items-center justify-center shadow-sm disabled:opacity-50">
+                                                <span :class="{'animate-spin text-lg': isLoadingSmsBowerBalance}" class="text-lg">{{ isLoadingSmsBowerBalance ? '⌛' : '💰' }}</span>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div class="md:col-span-2 pt-2">
+                                        <button @click="fetchSmsBowerPrices" :disabled="isLoadingSmsBowerPrices" class="w-full py-3 bg-gradient-to-r from-indigo-500 to-cyan-500 text-white rounded-xl text-sm md:text-base font-black hover:from-indigo-600 hover:to-cyan-600 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/30 disabled:opacity-50 disabled:cursor-not-allowed border border-indigo-400">
+                                            <span :class="{'animate-spin': isLoadingSmsBowerPrices}">{{ isLoadingSmsBowerPrices ? '🔄' : '📊' }}</span>
+                                            {{ isLoadingSmsBowerPrices ? '正在拉取全球库存数据...' : '点击获取当前服务全球价格与库存面板' }}
+                                        </button>
+                                    </div>
+
+                                    <div v-if="smsBowerPrices.length > 0" class="md:col-span-2 mt-2 bg-white rounded-2xl border border-indigo-200 overflow-hidden shadow-md animate-fade-in">
+                                        <div class="bg-gradient-to-r from-indigo-100 to-blue-50 px-5 py-3.5 border-b border-indigo-200 flex justify-between items-center">
+                                            <span class="text-xs font-black text-indigo-900 tracking-wide flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.8)] animate-pulse"></span>当前项目: <code class="bg-white px-1.5 py-0.5 rounded border border-indigo-200">{{ config.smsbower.service }}</code> 实时库存 (按价格升序)</span>
+                                            <button @click="smsBowerPrices = []" class="text-indigo-500 hover:text-indigo-700 bg-white/50 px-2.5 py-1 rounded-lg text-xs font-bold transition-colors shadow-sm border border-indigo-200/50">关闭面板</button>
+                                        </div>
+                                        <div class="max-h-[350px] overflow-y-auto custom-scrollbar">
+                                            <table class="min-w-full divide-y divide-indigo-100/50">
+                                                <thead class="bg-white sticky top-0 z-10 shadow-sm">
+                                                <tr class="text-[11px] text-slate-400 font-black uppercase tracking-widest">
+                                                    <th class="px-5 py-3.5 text-left bg-slate-50/80 backdrop-blur-sm">国家 / ID</th>
+                                                    <th class="px-5 py-3.5 text-left bg-slate-50/80 backdrop-blur-sm">单价 (USD)</th>
+                                                    <th class="px-5 py-3.5 text-left bg-slate-50/80 backdrop-blur-sm">余量 (个)</th>
+                                                    <th class="px-5 py-3.5 text-right bg-slate-50/80 backdrop-blur-sm">操作</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="divide-y divide-slate-50 text-xs font-medium">
+                                                <tr v-for="item in smsBowerPrices" :key="item.country" class="hover:bg-indigo-50/40 transition-colors group">
+                                                    <td class="px-5 py-3">
+                                                        <div class="font-black text-slate-700 group-hover:text-indigo-700 transition-colors">{{ item.name }}</div>
+                                                        <div class="text-[10px] text-slate-400 font-mono mt-0.5">ID: {{ item.country }}</div>
+                                                    </td>
+                                                    <td class="px-5 py-3">
+                                                        <span class="bg-emerald-50 text-emerald-600 border border-emerald-100 font-black px-2 py-0.5 rounded-md shadow-sm">{{ item.cost }} $</span>
+                                                    </td>
+                                                    <td class="px-5 py-3 text-slate-500 font-mono">{{ item.count }}</td>
+                                                    <td class="px-5 py-3 text-right">
+                                                        <button @click="config.smsbower.country = item.country; showToast('已切换至: ' + item.name, 'success')"
+                                                                class="bg-white border border-indigo-200 text-indigo-600 px-4 py-1.5 rounded-lg hover:bg-indigo-500 hover:text-white hover:border-indigo-500 active:scale-95 transition-all font-bold shadow-sm">
+                                                            选用
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+
+                                    <div class="md:col-span-2 grid grid-cols-2 lg:grid-cols-5 gap-4 md:gap-5 mt-2">
+                                        <div class="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100">
+                                            <label class="block text-[11px] text-indigo-900 font-black mb-1 uppercase tracking-wider">余额触发下限 ($)</label>
+                                            <span class="text-[10px] text-indigo-500/80 block mb-3 font-medium">低于此值停止任务</span>
+                                            <input type="number" step="0.1" v-model.number="config.smsbower.min_balance" class="w-full appearance-none bg-white border border-indigo-200 text-slate-700 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors shadow-sm text-sm font-mono text-center">
+                                        </div>
+                                        <div class="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100">
+                                            <label class="block text-[11px] text-indigo-900 font-black mb-1 uppercase tracking-wider">最大取号单价 ($)</label>
+                                            <span class="text-[10px] text-indigo-500/80 block mb-3 font-medium">超过此价不买号</span>
+                                            <input type="number" step="0.1" v-model.number="config.smsbower.max_price" class="w-full appearance-none bg-white border border-indigo-200 text-slate-700 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors shadow-sm text-sm font-mono text-center">
+                                        </div>
+                                        <div class="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100">
+                                            <label class="block text-[11px] text-indigo-900 font-black mb-1 uppercase tracking-wider">最低取号单价 ($)</label>
+                                            <span class="text-[10px] text-indigo-500/80 block mb-3 font-medium">低于此价不买号</span>
+                                            <input type="number" step="0.1" v-model.number="config.smsbower.min_price" class="w-full appearance-none bg-white border border-indigo-200 text-slate-700 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors shadow-sm text-sm font-mono text-center">
+                                        </div>
+                                        <div class="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100">
+                                            <label class="block text-[11px] text-indigo-900 font-black mb-1 uppercase tracking-wider">单次任务取号上限</label>
+                                            <span class="text-[10px] text-indigo-500/80 block mb-3 font-medium">失败多少次后放弃</span>
+                                            <input type="number" v-model.number="config.smsbower.max_tries" class="w-full appearance-none bg-white border border-indigo-200 text-slate-700 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors shadow-sm text-sm font-mono text-center">
+                                        </div>
+                                        <div class="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100">
+                                            <label class="block text-[11px] text-indigo-900 font-black mb-1 uppercase tracking-wider">等码超时 (秒)</label>
+                                            <span class="text-[10px] text-indigo-500/80 block mb-3 font-medium">单个号等多久超时</span>
+                                            <input type="number" v-model.number="config.smsbower.poll_timeout_sec" class="w-full appearance-none bg-white border border-indigo-200 text-slate-700 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors shadow-sm text-sm font-mono text-center">
+                                        </div>
+                                    </div>
+
+                                    <div class="md:col-span-2 flex flex-col sm:flex-row gap-4 mt-2 pt-6 border-t border-indigo-100">
+                                        <label class="relative inline-flex flex-1 items-center p-4 bg-white rounded-xl border border-indigo-200 shadow-sm cursor-pointer hover:bg-indigo-50 transition-colors group">
+                                            <input type="checkbox" v-model="config.smsbower.auto_pick_country" class="sr-only peer">
+                                            <div class="relative w-11 h-6 shrink-0 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-indigo-500 shadow-inner transition-colors duration-300 group-hover:shadow-md"></div>
+                                            <span class="ml-4 text-sm font-black text-indigo-900 tracking-wide">智能国家优选 <span class="text-xs font-medium text-indigo-600/80 block mt-0.5">(避开黑名单/超时区)</span></span>
+                                        </label>
+                                        <label class="relative inline-flex flex-1 items-center p-4 bg-white rounded-xl border border-indigo-200 shadow-sm cursor-pointer hover:bg-indigo-50 transition-colors group">
+                                            <input type="checkbox" v-model="config.smsbower.reuse_phone" class="sr-only peer">
+                                            <div class="relative w-11 h-6 shrink-0 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-indigo-500 shadow-inner transition-colors duration-300 group-hover:shadow-md"></div>
+                                            <div class="ml-4 flex flex-col justify-center">
+                                                <span class="text-sm font-black text-indigo-900 tracking-wide flex items-center gap-2">
+                                                    启用号码复用机制
+                                                    <span v-if="config.smsbower.reuse_phone" class="inline-flex items-center gap-1 bg-indigo-50/80 border border-indigo-200 px-2 py-0.5 rounded text-xs font-mono shadow-sm">
+                                                        最多 <input type="number" v-model.number="config.smsbower.reuse_max" class="w-10 bg-white border border-indigo-200 text-center outline-none font-bold text-indigo-700 rounded" min="1"> 次
+                                                    </span>
+                                                </span>
+                                                <span class="text-xs font-medium text-indigo-600/80 mt-0.5">(开启后可在指定次数内反复拿号)</span>
+                                            </div>
+                                        </label>
+                                        <label class="relative inline-flex items-center p-4 bg-rose-50/50 rounded-xl border border-rose-200 shadow-sm cursor-pointer hover:bg-rose-100/50 transition-colors group">
+                                            <input type="checkbox" v-model="config.smsbower.verify_on_register" class="sr-only peer">
+                                            <div class="relative w-11 h-6 shrink-0 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-rose-500 shadow-inner transition-colors duration-300 group-hover:shadow-md"></div>
+                                            <span class="ml-4 text-sm font-black text-rose-900 tracking-wide">账号创建时接码 <span class="text-xs font-medium text-rose-600/80 block mt-0.5">(注: 仅创建拦截有效)</span></span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="bg-white p-6 md:p-8 rounded-2xl shadow-sm hover:shadow-md transition-shadow duration-300 border border-slate-200/60 lg:col-span-2 border-t-4 border-t-teal-500 bg-gradient-to-b from-teal-50/30 to-white" v-if="config.fivesim">
+                                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 md:mb-8 border-b border-teal-100 pb-5 gap-4">
+                                    <h3 class="text-xl md:text-2xl font-black text-teal-600 tracking-tight flex items-center flex-wrap gap-2">
+                                        <span>🌍</span> 5SIM 手机接码
+                                        <a href="https://5sim.net/" target="_blank" rel="noopener noreferrer" class="text-[10px] md:text-xs bg-teal-100 hover:bg-teal-200 text-teal-700 font-bold px-2 py-1 rounded-md sm:ml-2 transition-colors inline-flex items-center gap-1 border border-teal-200/60 shadow-sm">
+                                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                                            前往官网
+                                        </a>
+                                    </h3>
+                                    <label class="relative inline-flex bg-white px-4 py-2.5 md:px-5 md:py-3 rounded-xl cursor-pointer hover:bg-teal-50 transition-colors shadow-sm border border-teal-200 w-full sm:w-auto items-center justify-center group">
+                                         <input type="checkbox" v-model="config.fivesim.enabled" @change="if(config.fivesim.enabled) { config.smsbower.enabled = false; config.hero_sms.enabled = false; }" class="sr-only peer">
+                                        <div class="relative w-11 h-6 shrink-0 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-teal-500 shadow-inner transition-colors duration-300 group-hover:shadow-md"></div>
+                                        <span class="font-black text-teal-900 text-sm md:text-base ml-3 tracking-wide">主开关：开启接码</span>
+                                    </label>
+                                </div>
+
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-5 md:gap-8" :class="{'opacity-50 pointer-events-none grayscale-[50%] transition-opacity duration-300': !config.fivesim.enabled}">
+                                    <div>
+                                        <label class="flex justify-between items-end text-xs md:text-sm text-teal-900 font-black mb-2 uppercase tracking-wider">
+                                            <span>API Key</span>
+                                            <span class="text-teal-600 bg-teal-100 px-2 py-1 rounded-md border border-teal-200 shadow-sm text-[10px] md:text-xs">余额: <span class="font-mono font-bold">{{ fivesimBalance || '0.00' }}</span> $</span>
+                                        </label>
+                                        <div class="flex gap-3">
+                                            <div class="relative flex-1">
+                                                <input :type="showPwd.fivesim_key ? 'text' : 'password'" v-model="config.fivesim.api_key" class="w-full appearance-none bg-white border border-teal-200 text-slate-700 rounded-xl py-3 px-4 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-colors shadow-sm text-sm font-mono placeholder:text-slate-300" placeholder="5SIM API Key">
+                                                <button @click="showPwd.fivesim_key = !showPwd.fivesim_key" class="absolute right-3 top-1/2 -translate-y-1/2 text-lg text-slate-400 hover:text-teal-600 focus:outline-none">{{ showPwd.fivesim_key ? '👁️' : '🙈' }}</button>
+                                            </div>
+                                            <button @click="fetchFivesimBalance" :disabled="isLoadingFivesimBalance" class="px-4 bg-white text-teal-600 rounded-xl hover:bg-teal-50 active:scale-95 transition-all border border-teal-200 flex items-center justify-center shadow-sm disabled:opacity-50">
+                                                <span :class="{'animate-spin text-lg': isLoadingFivesimBalance}" class="text-lg">{{ isLoadingFivesimBalance ? '⌛' : '💰' }}</span>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div class="md:col-span-2 pt-2">
+                                        <button @click="fetchFivesimPrices" :disabled="isLoadingFivesimPrices" class="w-full py-3 bg-gradient-to-r from-teal-500 to-emerald-500 text-white rounded-xl text-sm md:text-base font-black hover:from-teal-600 hover:to-emerald-600 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-lg shadow-teal-500/30 disabled:opacity-50 disabled:cursor-not-allowed border border-teal-400">
+                                            <span :class="{'animate-spin': isLoadingFivesimPrices}">{{ isLoadingFivesimPrices ? '🔄' : '📊' }}</span>
+                                            {{ isLoadingFivesimPrices ? '正在拉取全球库存数据...' : '点击获取当前服务全球价格与库存面板' }}
+                                        </button>
+                                    </div>
+
+                                    <div v-if="fivesimPrices.length > 0" class="md:col-span-2 mt-2 bg-white rounded-2xl border border-teal-200 overflow-hidden shadow-md animate-fade-in">
+                                        <div class="bg-gradient-to-r from-teal-100 to-emerald-50 px-5 py-3.5 border-b border-teal-200 flex justify-between items-center">
+                                            <span class="text-xs font-black text-teal-900 tracking-wide flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.8)] animate-pulse"></span>当前项目: <code class="bg-white px-1.5 py-0.5 rounded border border-teal-200">{{ config.fivesim.service }}</code> 实时库存</span>
+                                            <button @click="fivesimPrices = []" class="text-teal-500 hover:text-teal-700 bg-white/50 px-2.5 py-1 rounded-lg text-xs font-bold transition-colors shadow-sm border border-teal-200/50">关闭面板</button>
+                                        </div>
+                                        <div class="max-h-[350px] overflow-y-auto custom-scrollbar">
+                                            <table class="min-w-full divide-y divide-teal-100/50">
+                                                <thead class="bg-white sticky top-0 z-10 shadow-sm">
+                                                <tr class="text-[11px] text-slate-400 font-black uppercase tracking-widest">
+                                                    <th class="px-5 py-3.5 text-left bg-slate-50/80 backdrop-blur-sm">国家 / ID</th>
+                                                    <th class="px-5 py-3.5 text-left bg-slate-50/80 backdrop-blur-sm">起步单价 ($)</th>
+                                                    <th class="px-5 py-3.5 text-left bg-slate-50/80 backdrop-blur-sm">余量 (个)</th>
+                                                    <th class="px-5 py-3.5 text-right bg-slate-50/80 backdrop-blur-sm">操作</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="divide-y divide-slate-50 text-xs font-medium">
+                                                <tr v-for="item in fivesimPrices" :key="item.country" class="hover:bg-teal-50/40 transition-colors group">
+                                                    <td class="px-5 py-3">
+                                                        <div class="font-black text-slate-700 group-hover:text-teal-700 transition-colors">{{ item.name }}</div>
+                                                        <div class="text-[10px] text-slate-400 font-mono mt-0.5">Code: {{ item.country }}</div>
+                                                    </td>
+                                                    <td class="px-5 py-3">
+                                                        <span class="bg-emerald-50 text-emerald-600 border border-emerald-100 font-black px-2 py-0.5 rounded-md shadow-sm">{{ item.cost }} $</span>
+                                                    </td>
+                                                    <td class="px-5 py-3 text-slate-500 font-mono">{{ item.count }}</td>
+                                                    <td class="px-5 py-3 text-right">
+                                                        <button @click="config.fivesim.country = item.country; showToast('已切换至: ' + item.name, 'success')"
+                                                                class="bg-white border border-teal-200 text-teal-600 px-4 py-1.5 rounded-lg hover:bg-teal-500 hover:text-white hover:border-teal-500 active:scale-95 transition-all font-bold shadow-sm">选用</button>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+
+                                    <div class="md:col-span-2 grid grid-cols-2 lg:grid-cols-5 gap-4 md:gap-5 mt-2">
+                                        <div class="bg-teal-50/50 p-4 rounded-xl border border-teal-100">
+                                            <label class="block text-[11px] text-teal-900 font-black mb-1 uppercase tracking-wider">余额触发下限 ($)</label>
+                                            <span class="text-[10px] text-teal-500/80 block mb-3 font-medium">低于此值停止任务</span>
+                                            <input type="number" step="0.1" v-model.number="config.fivesim.min_balance" class="w-full appearance-none bg-white border border-teal-200 text-slate-700 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-colors shadow-sm text-sm font-mono text-center">
+                                        </div>
+                                        <div class="bg-teal-50/50 p-4 rounded-xl border border-teal-100">
+                                            <label class="block text-[11px] text-teal-900 font-black mb-1 uppercase tracking-wider">最大取号单价 ($)</label>
+                                            <span class="text-[10px] text-teal-500/80 block mb-3 font-medium">超过此价不买号</span>
+                                            <input type="number" step="0.1" v-model.number="config.fivesim.max_price" class="w-full appearance-none bg-white border border-teal-200 text-slate-700 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-colors shadow-sm text-sm font-mono text-center">
+                                        </div>
+                                        <div class="bg-teal-50/50 p-4 rounded-xl border border-teal-100">
+                                            <label class="block text-[11px] text-teal-900 font-black mb-1 uppercase tracking-wider">最低取号单价 ($)</label>
+                                            <span class="text-[10px] text-teal-500/80 block mb-3 font-medium">低于此价不买号</span>
+                                            <input type="number" step="0.1" v-model.number="config.fivesim.min_price" class="w-full appearance-none bg-white border border-teal-200 text-slate-700 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-colors shadow-sm text-sm font-mono text-center">
+                                        </div>
+                                        <div class="bg-teal-50/50 p-4 rounded-xl border border-teal-100">
+                                            <label class="block text-[11px] text-teal-900 font-black mb-1 uppercase tracking-wider">单次任务取号上限</label>
+                                            <span class="text-[10px] text-teal-500/80 block mb-3 font-medium">失败多少次后彻底放弃</span>
+                                            <input type="number" v-model.number="config.fivesim.max_tries" class="w-full appearance-none bg-white border border-teal-200 text-slate-700 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-colors shadow-sm text-sm font-mono text-center">
+                                        </div>
+                                        <div class="bg-teal-50/50 p-4 rounded-xl border border-teal-100">
+                                            <label class="block text-[11px] text-teal-900 font-black mb-1 uppercase tracking-wider">等码超时 (秒)</label>
+                                            <span class="text-[10px] text-teal-500/80 block mb-3 font-medium">单个号等多久超时</span>
+                                            <input type="number" v-model.number="config.fivesim.poll_timeout_sec" class="w-full appearance-none bg-white border border-teal-200 text-slate-700 rounded-lg py-2 px-3 focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-colors shadow-sm text-sm font-mono text-center">
+                                        </div>
+                                    </div>
+
+                                    <div class="md:col-span-2 flex flex-col sm:flex-row gap-4 mt-2 pt-6 border-t border-teal-100">
+                                        <label class="relative inline-flex flex-1 items-center p-4 bg-white rounded-xl border border-teal-200 shadow-sm cursor-pointer hover:bg-teal-50 transition-colors group">
+                                            <input type="checkbox" v-model="config.fivesim.auto_pick_country" class="sr-only peer">
+                                            <div class="relative w-11 h-6 shrink-0 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-teal-500 shadow-inner transition-colors duration-300 group-hover:shadow-md"></div>
+                                            <span class="ml-4 text-sm font-black text-teal-900 tracking-wide">智能国家优选 <span class="text-xs font-medium text-teal-600/80 block mt-0.5">(避开黑名单/超时区)</span></span>
+                                        </label>
+                                        <label class="relative inline-flex flex-1 items-center p-4 bg-white rounded-xl border border-indigo-200 shadow-sm cursor-pointer hover:bg-teal-50 transition-colors group">
+                                            <input type="checkbox" v-model="config.fivesim.reuse_phone" class="sr-only peer">
+                                            <div class="relative w-11 h-6 shrink-0 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-teal-500 shadow-inner transition-colors duration-300 group-hover:shadow-md"></div>
+                                            <div class="ml-4 flex flex-col justify-center">
+                                                <span class="text-sm font-black text-teal-900 tracking-wide flex items-center gap-2">
+                                                    启用号码复用机制
+                                                    <span v-if="config.fivesim.reuse_phone" class="inline-flex items-center gap-1 bg-teal-50/80 border border-teal-200 px-2 py-0.5 rounded text-xs font-mono shadow-sm">
+                                                        最多 <input type="number" v-model.number="config.fivesim.reuse_max" class="w-10 bg-white border border-teal-200 text-center outline-none font-bold text-teal-700 rounded" min="1"> 次
+                                                    </span>
+                                                </span>
+                                                <span class="text-xs font-medium text-teal-600/80 mt-0.5">(开启后可在指定次数内反复拿号)</span>
+                                            </div>
+                                        </label>
+                                        <label class="relative inline-flex items-center p-4 bg-rose-50/50 rounded-xl border border-rose-200 shadow-sm cursor-pointer hover:bg-rose-100/50 transition-colors group">
+                                            <input type="checkbox" v-model="config.fivesim.verify_on_register" class="sr-only peer">
+                                            <div class="relative w-11 h-6 shrink-0 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all after:shadow-sm peer-checked:bg-rose-500 shadow-inner transition-colors duration-300 group-hover:shadow-md"></div>
+                                            <span class="ml-4 text-sm font-black text-rose-900 tracking-wide">账号创建时接码 <span class="text-xs font-medium text-rose-600/80 block mt-0.5">(注: 仅创建拦截有效)</span></span>
                                         </label>
                                     </div>
                                 </div>
@@ -2043,6 +2448,10 @@
                                     </div>
                                 </div>
                                 <div class="flex flex-wrap gap-3 items-center w-full xl:w-auto">
+                                    <div class="relative flex items-center">
+                                        <span class="absolute left-3 text-slate-400 text-sm">🔍</span>
+                                        <input type="text" v-model="searchCloud" placeholder="搜索云端账号..." class="pl-8 pr-3 py-1.5 w-32 md:w-48 text-sm bg-white border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition shadow-sm font-medium">
+                                    </div>
                                     <button @click="showCloudPlaintext = !showCloudPlaintext" class="text-sm bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-50 active:scale-95 transition shadow-sm font-bold flex items-center gap-1">
                                         <span>{{ showCloudPlaintext ? '🙈' : '👁️' }}</span> {{ showCloudPlaintext ? '脱敏' : '明文' }}
                                     </button>
@@ -2079,7 +2488,7 @@
                                     <thead class="bg-slate-50/80">
                                         <tr>
                                             <th class="px-5 md:px-8 py-4 text-left w-12">
-                                                <input type="checkbox" @change="toggleAllCloud" :checked="selectedCloud.length === cloudAccounts.length && cloudAccounts.length > 0" class="form-checkbox w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 transition-all">
+                                                <input type="checkbox" @change="toggleAllCloud" :checked="selectedCloud.length === filteredCloud.length && filteredCloud.length > 0" class="form-checkbox w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 transition-all">
                                             </th>
                                             <th class="px-5 md:px-8 py-4 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest w-20">类型</th>
                                             <th class="px-5 md:px-8 py-4 text-left text-[11px] font-black text-slate-400 uppercase tracking-widest min-w-[200px]">远端凭证 (账号)</th>
@@ -2090,10 +2499,10 @@
                                         </tr>
                                     </thead>
                                     <tbody class="bg-white divide-y divide-slate-50">
-                                        <tr v-if="!cloudAccounts.length">
+                                        <tr v-if="!filteredCloud.length">
                                             <td colspan="7" class="px-6 py-16 text-center text-slate-400 font-medium bg-slate-50/30">暂无云端账号数据或未勾选平台</td>
                                         </tr>
-                                        <tr v-for="acc in cloudAccounts" :key="acc.id + acc.account_type" class="hover:bg-indigo-50/40 transition duration-200" :class="{'bg-indigo-50/60': selectedCloud.some(s => s.id === acc.id && s.type === acc.account_type)}">
+                                        <tr v-for="acc in filteredCloud" :key="acc.id + acc.account_type" class="hover:bg-indigo-50/40 transition duration-200" :class="{'bg-indigo-50/60': selectedCloud.some(s => s.id === acc.id && s.type === acc.account_type)}">
                                             <td class="px-5 md:px-8 py-4 whitespace-nowrap">
                                                 <input type="checkbox" :value="{id: String(acc.id), type: acc.account_type}" v-model="selectedCloud" class="form-checkbox w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 transition-all">
                                             </td>
@@ -2219,6 +2628,15 @@
                                 </div>
 
                                 <div class="flex gap-2 w-full md:w-auto justify-between md:justify-end">
+                                    <div class="flex items-center gap-1 bg-white border border-slate-200 rounded-xl px-2 shadow-sm mr-1 h-[38px] focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 transition-all">
+                                        <span class="text-xs text-slate-400 font-bold">前往</span>
+                                        <input type="number"
+                                               :placeholder="cloudPage"
+                                               @change="if($event.target.value) changeCloudPage(parseInt($event.target.value)); $event.target.value='';"
+                                               @keyup.enter="$event.target.blur()"
+                                               class="w-10 text-center text-sm font-bold text-slate-700 placeholder:text-slate-700 border-none focus:ring-0 p-0 m-0 bg-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none">
+                                        <span class="text-xs text-slate-400 font-bold">页</span>
+                                    </div>
                                     <button @click="changeCloudPage(cloudPage - 1)" :disabled="cloudPage <= 1" class="px-4 py-2 rounded-xl text-sm font-bold bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all active:scale-95">
                                         上一页
                                     </button>

@@ -34,7 +34,14 @@ from utils import config as cfg
 from utils import db_manager
 from utils.config import reload_all_configs, ts, format_docker_url
 from utils.email_providers.mail_service import mask_email
-from utils.register import run, refresh_oauth_token as _refresh_oauth_token
+try:
+    from utils.auth_pipeline.register import run
+    from utils.auth_pipeline.oauth import refresh_oauth_token as _refresh_oauth_token
+    _AUTH_PIPELINE_IMPORT_ERROR = None
+except Exception as exc:
+    _AUTH_PIPELINE_IMPORT_ERROR = exc
+    from utils.register import run, refresh_oauth_token as _refresh_oauth_token
+
 from utils.proxy_manager import smart_switch_node
 from utils.integrations.sub2api_client import Sub2APIClient
 from utils.integrations.tg_notifier import send_tg_msg_sync

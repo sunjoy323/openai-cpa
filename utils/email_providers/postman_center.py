@@ -88,6 +88,8 @@ class PostmanFleet:
                     new_format = re.findall(r"enter this code:\s*(\d{6})", body, re.I)
                     if not new_format:
                         new_format = re.findall(r"verification code to continue:\s*(\d{6})", body, re.I)
+                    if not new_format:
+                        new_format = re.findall(r"输入此(?:临时)?验证码以继续[：:]\s*(\d{6})", body, re.I)
 
                     if new_format:
                         code = new_format[-1]
@@ -99,7 +101,7 @@ class PostmanFleet:
                             subject_lower = subject.lower()
                             body_lower = body.lower()
                             if "chatgpt" in subject_lower or "openai" in subject_lower or "chatgpt" in body_lower or "openai" in body_lower:
-                                generic = re.findall(r"\b(\d{6})\b", body)
+                                generic = re.findall(r"(?<!\d)(\d{6})(?!\d)", body)
                                 if generic:
                                     code = generic[-1]
 

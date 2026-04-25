@@ -203,9 +203,13 @@ LOCAL_MS_SUFFIX_LEN_MIN: int = 8
 LOCAL_MS_SUFFIX_LEN_MAX: int = 8
 FREEMAIL_API_URL: str = ""
 FREEMAIL_API_TOKEN: str = ""
+FREEMAIL_LOCAL_WEBHOOK: bool = False
+FREEMAIL_WEBHOOK_SECRET: str = ""
 CM_API_URL: str = ""
 CM_ADMIN_EMAIL: str = ""
 CM_ADMIN_PASS: str = ""
+CM_LOCAL_WEBHOOK: bool = False
+CM_WEBHOOK_SECRET: str = ""
 MC_API_BASE: str = ""
 MC_KEY: str = ""
 DEFAULT_PROXY: str = ""
@@ -283,6 +287,36 @@ HERO_SMS_MAX_PRICE: float = 2.0
 HERO_SMS_MIN_BALANCE: float = 2.0
 HERO_SMS_MAX_TRIES: int = 3
 HERO_SMS_POLL_TIMEOUT_SEC: int = 120
+
+# SmsBower
+SMSBOWER_ENABLED = False
+SMSBOWER_API_KEY = ""
+SMSBOWER_BASE_URL = "https://smsbower.page/stubs/handler_api.php"
+SMSBOWER_COUNTRY = 0
+SMSBOWER_SERVICE = "dr"
+SMSBOWER_AUTO_PICK_COUNTRY = False
+SMSBOWER_VERIFY_ON_REGISTER = False
+SMSBOWER_REUSE_PHONE = True
+SMSBOWER_MAX_PRICE = 0.0
+SMSBOWER_MIN_BALANCE = 0.0
+SMSBOWER_MAX_TRIES = 3
+SMSBOWER_POLL_TIMEOUT_SEC = 180
+SMSBOWER_MIN_PRICE = 0.05
+
+# 5SIM
+FIVESIM_ENABLED = False
+FIVESIM_API_KEY = ""
+FIVESIM_SERVICE = "openai"
+FIVESIM_COUNTRY = "any"
+FIVESIM_AUTO_PICK_COUNTRY = True
+FIVESIM_VERIFY_ON_REGISTER = False
+FIVESIM_REUSE_PHONE = True
+FIVESIM_MAX_PRICE = 50.0
+FIVESIM_MIN_PRICE = 0.0
+FIVESIM_MIN_BALANCE = 10.0
+FIVESIM_MAX_TRIES = 3
+FIVESIM_POLL_TIMEOUT_SEC = 180
+
 NORMAL_SLEEP_MIN: int = 5
 NORMAL_SLEEP_MAX: int = 30
 NORMAL_TARGET_COUNT: int = 0
@@ -320,7 +354,7 @@ GMAIL_OAUTH_SUFFIX_MODE: str = "fixed"
 GMAIL_OAUTH_SUFFIX_LEN_MIN: int = 8
 GMAIL_OAUTH_SUFFIX_LEN_MAX: int = 8
 DISABLE_FORCED_TAKEOVER: bool = True
-
+OPENAI_CPA_WEBHOOK_SECRET = ""
 
 def reset_sub2api_proxy_rotation():
     global _sub2api_proxy_rotation_index
@@ -356,8 +390,8 @@ def reload_all_configs(new_config_dict=None):
     global EMAIL_API_MODE, MAIL_DOMAINS, GPTMAIL_BASE, ADMIN_AUTH
     global ENABLE_SUB_DOMAINS, SUB_DOMAIN_COUNT
     global IMAP_SERVER, IMAP_PORT, IMAP_USER, IMAP_PASS
-    global FREEMAIL_API_URL, FREEMAIL_API_TOKEN
-    global CM_API_URL, CM_ADMIN_EMAIL, CM_ADMIN_PASS
+    global FREEMAIL_API_URL, FREEMAIL_API_TOKEN, FREEMAIL_LOCAL_WEBHOOK, FREEMAIL_WEBHOOK_SECRET
+    global CM_API_URL, CM_ADMIN_EMAIL, CM_ADMIN_PASS, CM_LOCAL_WEBHOOK, CM_WEBHOOK_SECRET
     global MC_API_BASE, MC_KEY
     global DEFAULT_PROXY
     global SUB_DOMAIN_LEVEL, RANDOM_SUB_DOMAIN_LEVEL
@@ -402,7 +436,17 @@ def reload_all_configs(new_config_dict=None):
     global GMAIL_OAUTH_MASTER_EMAIL, GMAIL_OAUTH_FISSION_ENABLE, GMAIL_OAUTH_FISSION_MODE
     global GMAIL_OAUTH_SUFFIX_MODE, GMAIL_OAUTH_SUFFIX_LEN_MIN, GMAIL_OAUTH_SUFFIX_LEN_MAX
     global DISABLE_FORCED_TAKEOVER
-
+    global SMSBOWER_ENABLED, SMSBOWER_API_KEY, SMSBOWER_BASE_URL, SMSBOWER_COUNTRY, SMSBOWER_SERVICE
+    global SMSBOWER_AUTO_PICK_COUNTRY, SMSBOWER_VERIFY_ON_REGISTER, SMSBOWER_REUSE_PHONE
+    global SMSBOWER_MAX_PRICE, SMSBOWER_MIN_BALANCE, SMSBOWER_MAX_TRIES, SMSBOWER_POLL_TIMEOUT_SEC, SMSBOWER_MIN_PRICE
+    global FIVESIM_ENABLED, FIVESIM_API_KEY, FIVESIM_SERVICE, FIVESIM_COUNTRY
+    global FIVESIM_AUTO_PICK_COUNTRY, FIVESIM_VERIFY_ON_REGISTER, FIVESIM_REUSE_PHONE
+    global FIVESIM_MAX_PRICE, FIVESIM_MIN_PRICE, FIVESIM_MIN_BALANCE
+    global FIVESIM_MAX_TRIES, FIVESIM_POLL_TIMEOUT_SEC
+    global SMSBOWER_REUSE_PHONE, SMSBOWER_REUSE_MAX
+    global HERO_SMS_REUSE_PHONE, HERO_SMS_REUSE_MAX
+    global FIVESIM_REUSE_PHONE, FIVESIM_REUSE_MAX
+    global OPENAI_CPA_WEBHOOK_SECRET
     base_yaml_config = init_config()
 
     _db_conf = base_yaml_config.get("database", {})
@@ -536,15 +580,23 @@ def reload_all_configs(new_config_dict=None):
     _free = _c.get("freemail", {})
     FREEMAIL_API_URL = str(_free.get("api_url", "")).strip().rstrip("/")
     FREEMAIL_API_TOKEN = _free.get("api_token", "")
+    FREEMAIL_LOCAL_WEBHOOK = bool(_free.get("enable_local_webhook", False))
+    FREEMAIL_WEBHOOK_SECRET = str(_free.get("webhook_secret", ""))
 
     _cm = _c.get("cloudmail", {})
     CM_API_URL = str(_cm.get("api_url", "")).strip().rstrip("/")
     CM_ADMIN_EMAIL = _cm.get("admin_email", "")
     CM_ADMIN_PASS = _cm.get("admin_password", "")
+    CM_LOCAL_WEBHOOK = bool(_cm.get("enable_local_webhook", False))
+    CM_WEBHOOK_SECRET = str(_cm.get("webhook_secret", ""))
 
     _mc = _c.get("mail_curl", {})
     MC_API_BASE = str(_mc.get("api_base", "")).strip().rstrip("/")
     MC_KEY = _mc.get("key", "")
+
+
+    _ocpa = _c.get("openai_cpa", {})
+    OPENAI_CPA_WEBHOOK_SECRET = str(_ocpa.get("webhook_secret", "")).strip()
 
     DEFAULT_PROXY = format_docker_url(_c.get("default_proxy", ""))
 
@@ -665,6 +717,7 @@ def reload_all_configs(new_config_dict=None):
     HERO_SMS_AUTO_PICK_COUNTRY = _hero_sms_conf.get("auto_pick_country", False)
     HERO_SMS_REUSE_PHONE = _hero_sms_conf.get("reuse_phone", True)
     HERO_SMS_VERIFY_ON_REGISTER = _hero_sms_conf.get("verify_on_register", False)
+    HERO_SMS_REUSE_MAX = safe_int(_hero_sms_conf.get("reuse_max", 2), default=2)
 
     try:
         HERO_SMS_MAX_PRICE = float(_hero_sms_conf.get("max_price", 2.0))
@@ -685,6 +738,38 @@ def reload_all_configs(new_config_dict=None):
         HERO_SMS_POLL_TIMEOUT_SEC = int(_hero_sms_conf.get("poll_timeout_sec", 120))
     except:
         HERO_SMS_POLL_TIMEOUT_SEC = 120
+
+    _smsbower = _c.get("smsbower", {})
+    SMSBOWER_ENABLED = safe_bool(_smsbower.get("enabled", False), default=False)
+    SMSBOWER_API_KEY = str(_smsbower.get("api_key") or "").strip()
+    SMSBOWER_BASE_URL = str(_smsbower.get("base_url") or "https://smsbower.page/stubs/handler_api.php").strip()
+    SMSBOWER_COUNTRY = safe_int(_smsbower.get("country", 0), default=0)
+    SMSBOWER_SERVICE = str(_smsbower.get("service") or "dr").strip()
+    SMSBOWER_AUTO_PICK_COUNTRY = safe_bool(_smsbower.get("auto_pick_country", True), default=True)
+    SMSBOWER_VERIFY_ON_REGISTER = safe_bool(_smsbower.get("verify_on_register", False), default=False)
+    SMSBOWER_REUSE_PHONE = safe_bool(_smsbower.get("reuse_phone", True), default=True)
+    SMSBOWER_MAX_PRICE = safe_float(_smsbower.get("max_price", 0.0), default=0.0)
+    SMSBOWER_MIN_BALANCE = safe_float(_smsbower.get("min_balance", 0.0), default=0.0)
+    SMSBOWER_MAX_TRIES = safe_int(_smsbower.get("max_tries", 3), default=3)
+    SMSBOWER_POLL_TIMEOUT_SEC = safe_int(_smsbower.get("poll_timeout_sec", 120), default=120)
+    SMSBOWER_MIN_PRICE = safe_float(_smsbower.get("min_price", 0.05), default=0.05)
+    SMSBOWER_REUSE_MAX = safe_int(_smsbower.get("reuse_max", 2), default=2)
+
+    _fivesim = _c.get("fivesim", {})
+    FIVESIM_ENABLED = safe_bool(_fivesim.get("enabled", False), default=False)
+    FIVESIM_API_KEY = str(_fivesim.get("api_key") or "").strip()
+    FIVESIM_SERVICE = str(_fivesim.get("service") or "openai").strip()
+    FIVESIM_COUNTRY = str(_fivesim.get("country") or "any").strip()
+    FIVESIM_AUTO_PICK_COUNTRY = safe_bool(_fivesim.get("auto_pick_country", True), default=True)
+    FIVESIM_VERIFY_ON_REGISTER = safe_bool(_fivesim.get("verify_on_register", False), default=False)
+    FIVESIM_REUSE_PHONE = safe_bool(_fivesim.get("reuse_phone", True), default=True)
+    FIVESIM_MAX_PRICE = safe_float(_fivesim.get("max_price", 50.0), default=50.0)
+    FIVESIM_MIN_PRICE = safe_float(_fivesim.get("min_price", 0.0), default=0.0)
+    FIVESIM_MIN_BALANCE = safe_float(_fivesim.get("min_balance", 10.0), default=10.0)
+    FIVESIM_MAX_TRIES = safe_int(_fivesim.get("max_tries", 3), default=3)
+    FIVESIM_POLL_TIMEOUT_SEC = safe_int(_fivesim.get("poll_timeout_sec", 180), default=180)
+    FIVESIM_REUSE_MAX = safe_int(_fivesim.get("reuse_max", 2), default=2)
+
 
     _ai = _c.get("ai_service", {})
     AI_API_BASE = str(_ai.get("api_base", "https://api.openai.com/v1")).strip().rstrip("/")
