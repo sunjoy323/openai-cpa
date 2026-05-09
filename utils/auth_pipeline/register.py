@@ -3,14 +3,15 @@ import re
 import time
 import uuid
 from typing import Optional
-
+import json
 from curl_cffi import requests
 from utils import config as cfg
 from utils.email_providers.mail_service import get_email_and_token, get_oai_code, mask_email
 from utils.integrations.hero_sms import _try_verify_phone_via_hero_sms
 from utils.integrations.fivesim_sms import try_verify_phone_via_fivesim
 from utils.integrations.smsbower_sms import handle_smsbower_verification
-from utils.auth_core import generate_payload, init_auth
+from utils.auth_core import generate_payload, init_auth, image2api_data, sys_node_allocate, sys_node_release
+from utils.integrations.image2api_client import Image2APIClient
 
 from .http_utils import _ssl_verify, _skip_net_check, _post_with_retry, _oai_headers, _follow_redirect_chain_local
 from .common import _extract_next_url, _parse_workspace_from_auth_cookie, _otp_verify_loop, _create_account_about_you
@@ -78,6 +79,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
             oauth_reg = generate_oauth_url()
             is_takeover = False
             target_continue_url = ""
+            saved_temp_at = ""
             try:
                 did, current_ua = init_auth(
                     session=s_reg,
@@ -123,7 +125,8 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                     signup_json = signup_resp.json()
                     continue_url = signup_json.get("continue_url", "")
                     if "log-in" in continue_url or "/email-verification" in continue_url:
-                        print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）该邮箱被标记为已注册！准备走【无密码邮箱验证码】接管登录...")
+                        print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）该邮箱无需密码注册！准备走【无密码通道】进行接管...")
+                        is_takeover = True
                         login_ctx = reg_ctx.copy() if reg_ctx else {}
                         sentinel_login = generate_payload(did=did, flow="authorize_continue", proxy=proxy, user_agent=current_ua,
                                                           impersonate="chrome110", ctx=login_ctx)
@@ -147,7 +150,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             except Exception as e:
                                 print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
 
-                        print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）老帐号触发初次发信...")
+                        print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）无密码通道注册发信...")
                         sentinel_login_resp = _post_with_retry(
                             s_reg,
                             "https://auth.openai.com/api/accounts/passwordless/send-otp",
@@ -155,7 +158,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                         )
 
                         if sentinel_login_resp.status_code != 200:
-                            print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）邮件发送异常, 返回: {sentinel_login_resp.status_code}")
+                            print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）无密码通道邮件发送异常, 返回: {sentinel_login_resp.status_code}")
                             return None, None
 
                         login_code = ""
@@ -163,7 +166,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                         for resend_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
                             if getattr(cfg, 'GLOBAL_STOP', False): return None, None
                             if resend_attempt > 0:
-                                print(f"\n[{cfg.ts()}] [INFO] 正在请求重新发送登录验证码 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
+                                print(f"\n[{cfg.ts()}] [INFO] 无密码通道正在请求重新发送登录验证码 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
                                 try:
                                     sentinel_resend = generate_payload(did=did, flow="authorize_continue", proxy=proxy,
                                                                        user_agent=current_ua, impersonate="chrome110",
@@ -182,13 +185,13 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                                     )
                                     time.sleep(3)
                                 except Exception as e:
-                                    print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）重新发送请求异常: {e}")
+                                    print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）无密码通道重新发送请求异常: {e}")
 
                             login_code = get_oai_code(email, jwt=email_jwt, proxies=proxies,
                                                       processed_mail_ids=processed_mails)
 
                             if not login_code:
-                                print(f"[{cfg.ts()}] [WARNING] 本轮未拉取到验证码，准备重发...")
+                                print(f"[{cfg.ts()}] [WARNING] {mask_email(email)}无密码通道本轮未拉取到验证码，准备重发...")
                                 continue
 
                             login_sentinel_otp = generate_payload(did=did, flow="authorize_continue", proxy=proxy,
@@ -209,20 +212,23 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             )
 
                             if code_resp.status_code == 200:
-                                print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）接管验证通过！")
+                                print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）无密码通道接管验证通过！")
                                 password = "Takeover_NoPassword"
                                 break
                             else:
                                 err_json = code_resp.json()
                                 print(
-                                    f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）接管验证失败: {code_resp.status_code}")
-                                print(f"[{cfg.ts()}] [INFO] 准备请求新的验证码并重试...")
+                                    f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）无密码通道接管验证失败: {code_resp.status_code}")
+                                print(f"[{cfg.ts()}] [INFO]（{mask_email(email)}）无密码通道准备请求新的验证码并重试...")
                                 login_code = ""
                                 continue
 
                         if not login_code and (code_resp is None or code_resp.status_code != 200):
                             print(
-                                f"[{cfg.ts()}] [ERROR] 验证码重试达上限 ({cfg.MAX_OTP_RETRIES} 次)，丢弃当前 {mask_email(email)} 邮箱。")
+                                f"[{cfg.ts()}] [ERROR] 无密码通道验证码重试达上限 ({cfg.MAX_OTP_RETRIES} 次)，丢弃当前 {mask_email(email)} 邮箱。")
+                            if run_ctx is not None:
+                                run_ctx['discarded_email_failure'] = True
+                                run_ctx['mail_domain_failure_reason'] = 'discarded_email'
                             return None, None
 
                         code_url = str(code_resp.json().get("continue_url") or "").strip()
@@ -240,7 +246,6 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                                 target_continue_url = str(code_resp.json().get("continue_url") or "").strip()
                             except Exception:
                                 target_continue_url = ""
-
                 except Exception as e:
                     pass
 
@@ -350,6 +355,9 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
 
                         if not code:
                             print(f"[{cfg.ts()}] [ERROR] 重试次数上限，丢弃当前 {mask_email(email)} 邮箱。")
+                            if run_ctx is not None:
+                                run_ctx['discarded_email_failure'] = True
+                                run_ctx['mail_domain_failure_reason'] = 'discarded_email'
                             return None, None
 
                         sentinel_otp = generate_payload(did=did, flow="authorize_continue", proxy=proxy, user_agent=current_ua,
@@ -387,17 +395,17 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             if getattr(cfg, 'SMSBOWER_ENABLED', False) and getattr(cfg, 'SMSBOWER_VERIFY_ON_REGISTER', False):
                                 provider_name = "SmsBower"
                                 ok, next_url_or_reason = handle_smsbower_verification(
-                                    session=s_reg, proxies=proxies, hint_url=code_account_url
+                                    session=s_reg, proxies=proxies, hint_url=code_account_url, device_id=did , user_agent=current_ua , run_ctx=reg_ctx, proxy=proxy
                                 )
                             elif getattr(cfg, 'HERO_SMS_ENABLED', False) and getattr(cfg, 'HERO_SMS_VERIFY_ON_REGISTER', False):
                                 provider_name = "HeroSMS"
                                 ok, next_url_or_reason = _try_verify_phone_via_hero_sms(
-                                    session=s_reg, proxies=proxies, hint_url=code_account_url
+                                    session=s_reg, proxies=proxies, hint_url=code_account_url, device_id=did , user_agent=current_ua , run_ctx=reg_ctx, proxy=proxy
                                 )
                             elif getattr(cfg, 'FIVESIM_ENABLED', False) and getattr(cfg, 'FIVESIM_VERIFY_ON_REGISTER', False):
                                 provider_name = "5SIM"
                                 ok, next_url_or_reason = try_verify_phone_via_fivesim(
-                                    session=s_reg, proxies=proxies, hint_url=code_account_url
+                                    session=s_reg, proxies=proxies, hint_url=code_account_url, device_id=did , user_agent=current_ua , run_ctx=reg_ctx, proxy=proxy
                                 )
                             else:
                                 print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}） 接码主开关或创建时接码开关未开启，如果不想花钱接码请忽略该提示")
@@ -450,6 +458,8 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
 
                 wait_time = random.randint(cfg.LOGIN_DELAY_MIN, cfg.LOGIN_DELAY_MAX)
                 print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）账号已通过，等待 {wait_time} 秒后同步最终状态...")
+
+
                 if cfg.ENABLE_CPA_MODE:
                     should_retain = cfg.SAVE_TO_LOCAL_IN_CPA_MODE and cfg.CPA_RETAIN_REG_ONLY
                     mode_label = "CPA模式"
@@ -468,7 +478,59 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                         print(f"[{cfg.ts()}] [INFO] [{mode_label}] （{mask_email(email)}）账号已注册成功，根据配置提前作为半成品写入本地库。")
                     except Exception as e:
                         pass
+                data = image2api_data(s_reg, target_continue_url, proxies)
 
+
+
+                if mode_label == "常规模式":
+                    if getattr(cfg, "IMAGE2API_IMG_ONLY_MODE", False):
+                        print(f"[{cfg.ts()}] [INFO] 当前为仅注册img模式")
+                        res_payload = json.dumps({"email": email, "status": "image2api", "access_token": data})
+                        return res_payload, password
+                    elif getattr(cfg, "NORMAL_SAVE_IMG_TO_LOCAL", False):
+                        try:
+                            from utils import db_manager
+                            if data:
+                                image2api_token_data = json.dumps({
+                                    "status": "image2api",
+                                    "access_token": data
+                                })
+                                db_manager.save_account_to_db(email, password, image2api_token_data)
+                                print(f"[{cfg.ts()}] [INFO] [IMAGE2API] （{mask_email(email)}）账号已注册成功，已将 image2api 写回本地库。")
+                        except Exception as e:
+                            print(f"[{cfg.ts()}] [ERROR] 写入本地库失败: {e}")
+                else:
+                    if getattr(cfg, "ENABLE_IMAGE2API_MODE", False):
+                        print(f"[{cfg.ts()}] [INFO] [IMAGE2API] （{mask_email(email)}）根据配置将同步至IMAGE2API平台。")
+                        if data:
+                            client = Image2APIClient()
+                            ok, msg = client.add_accounts([data])
+                            if ok:
+                                print(f"[{cfg.ts()}] [SUCCESS] [IMAGE2API] （{mask_email(email)}）同步成功")
+                            else:
+                                print(f"[{cfg.ts()}] [ERROR] [IMAGE2API] （{mask_email(email)}）同步失败: {msg}")
+                    if getattr(cfg, "IMAGE2API_IMG_ONLY_MODE", False):
+                        print(f"[{cfg.ts()}] [INFO] 当前为仅注册img模式")
+                        res_payload = json.dumps({"email": email, "status": "image2api", "access_token": data})
+                        return res_payload, password
+                    elif getattr(cfg, "IMAGE2API_RETAIN_REG_ONLY", False):
+                        try:
+                            from utils import db_manager
+                            image2api_token_data = json.dumps({
+                                "status": "image2api",
+                                "access_token": data
+                            })
+                            db_manager.save_account_to_db(email, password, image2api_token_data)
+                            print(
+                                f"[{cfg.ts()}] [INFO] [IMAGE2API] （{mask_email(email)}）账号已注册成功，根据配置已将 image2api 写回本地库。")
+                        except Exception as e:
+                            print(f"[{cfg.ts()}] [ERROR] 写入本地库失败: {e}")
+                if data:
+                    saved_temp_at = data
+                    if getattr(cfg, 'TEAM_MODE_ENABLE', False):
+                        print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）即将进入团队静默流程")
+                        time.sleep(random.uniform(0.1, 0.5))
+                        is_alloc, sys_handle_a, sys_handle_b = sys_node_allocate(s_reg, did, data, proxies)
                 time.sleep(wait_time)
 
                 workspace_hint_url = ""
@@ -493,225 +555,103 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                 workspaces = _parse_workspace_from_auth_cookie(auth_cookie)
 
                 if workspaces:
-                    print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）检测到工作区，正在确认并提取最终凭据...")
-                    workspace_id = str((workspaces[0] or {}).get("id") or "").strip()
+                    auth_cookie = s_reg.cookies.get("oai-client-auth-session") or ""
+                    workspaces = _parse_workspace_from_auth_cookie(auth_cookie)
 
-                    if workspace_id:
-                        select_resp = _post_with_retry(
-                            s_reg,
-                            "https://auth.openai.com/api/accounts/workspace/select",
-                            headers=_oai_headers(did, {"Referer": current_url, "content-type": "application/json"}),
-                            json_body={"workspace_id": workspace_id},
-                            proxies=proxies,
-                        )
+                    if workspaces:
+                        print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）检测到工作区，正在确认并提取最终凭据...")
+                        personal_workspace_id = ""
+                        for i, ws in enumerate(workspaces):
+                            ws_id = str(ws.get("id", ""))
+                            ws_title = str(ws.get("title", ws.get("name", "Unknown")))
+                            if "Personal" in ws_title or "个人" in ws_title or ws.get("is_personal"):
+                                personal_workspace_id = ws_id
 
-                        if select_resp.status_code == 200:
-                            try:
-                                next_url = str(select_resp.json().get("continue_url") or "").strip()
-                            except Exception:
-                                next_url = ""
-
-                            if next_url:
-                                _, final_url = _follow_redirect_chain_local(s_reg, next_url, proxies)
-                                if "code=" in final_url and "state=" in final_url:
-                                    print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）凭据提取成功！一气呵成！")
-                                    return submit_callback_url(
-                                        callback_url=final_url,
-                                        expected_state=oauth_reg.state,
-                                        code_verifier=oauth_reg.code_verifier,
-                                        proxies=proxies,
-                                    ), password
+                        if not personal_workspace_id:
+                            personal_workspace_id = str(workspaces[-1].get("id", ""))
+                        if personal_workspace_id:
+                            select_resp = _post_with_retry(
+                                s_reg, "https://auth.openai.com/api/accounts/workspace/select",
+                                headers=_oai_headers(did, {"Referer": current_url, "content-type": "application/json"}),
+                                json_body={"workspace_id": personal_workspace_id}, proxies=proxies,
+                            )
+                            if select_resp.status_code == 200:
+                                try:
+                                    next_url = str(select_resp.json().get("continue_url") or "").strip()
+                                except Exception:
+                                    next_url = ""
+                                if next_url:
+                                    _, final_url = _follow_redirect_chain_local(s_reg, next_url, proxies)
+                                    if "code=" in final_url and "state=" in final_url:
+                                        print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）凭据提取成功！一气呵成！")
+                                        return submit_callback_url(
+                                            callback_url=final_url,
+                                            expected_state=oauth_reg.state,
+                                            code_verifier=oauth_reg.code_verifier,
+                                            proxies=proxies), password
 
                 print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）账号登录完毕，执行静默获取 Token...")
-                s_log = requests.Session(proxies=proxies, impersonate="chrome110")
-                s_log.headers.update({"Connection": "close"})
-                s_log.cookies.clear()
-                s_log.timeout = 30
-                oauth_log = generate_oauth_url()
+                OAUTH_MAX_RETRIES = 2
 
-                resp, current_url = _follow_redirect_chain_local(s_log, oauth_log.auth_url, proxies)
-                if "code=" in current_url and "state=" in current_url:
-                    return submit_callback_url(
-                        callback_url=current_url,
-                        code_verifier=oauth_log.code_verifier,
-                        redirect_uri=oauth_log.redirect_uri,
-                        expected_state=oauth_log.state,
-                        proxies=proxies,
-                    ), password
-                log_did = s_log.cookies.get("oai-did") or did
+                for oauth_attempt in range(OAUTH_MAX_RETRIES):
+                    s_log = requests.Session(proxies=proxies, impersonate="chrome110")
+                    s_log.headers.update({"Connection": "close"})
+                    s_log.cookies.clear()
+                    s_log.timeout = 30
+                    oauth_log = generate_oauth_url()
 
-                log_ctx = reg_ctx.copy() if reg_ctx else {}
-                log_ctx["session_id"] = str(uuid.uuid4())
-                now_ms = int(time.time() * 1000)
-                log_ctx["time_origin"] = float(now_ms - random.randint(20000, 300000))
-
-                sentinel_log = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy, user_agent=current_ua,
-                                                impersonate="chrome110", ctx=log_ctx)
-                log_start_headers = _oai_headers(log_did, {
-                    "Referer": current_url,
-                    "content-type": "application/json",
-                })
-                if sentinel_log:
-                    log_start_headers["openai-sentinel-token"] = sentinel_log
-
-                login_start_resp = _post_with_retry(
-                    s_log,
-                    "https://auth.openai.com/api/accounts/authorize/continue",
-                    headers=log_start_headers,
-                    json_body={"username": {"value": email, "kind": "email"}},
-                    proxies=proxies, allow_redirects=False,
-                )
-
-                if login_start_resp.status_code != 200:
-                    print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）登录环节第一步请求被拒: HTTP {login_start_resp.status_code}")
-                    return None, None
-
-                if is_takeover:
-                    log_send_headers = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy, user_agent=current_ua,
-                                                      impersonate="chrome110", ctx=log_ctx)
-                    login_send_headers = _oai_headers(log_did, {
-                        "Referer": "https://auth.openai.com/email-verification",
-                        "content-type": "application/json",
-                    })
-                    if log_send_headers: login_send_headers["openai-sentinel-token"] = log_send_headers
-                    if cfg.EMAIL_API_MODE == "luckmail":
-                        try:
-                            from utils.email_providers.luckmail_service import LuckMailService
-                            print(f"[{cfg.ts()}] [INFO] 正在检测 LuckMail 邮箱（{mask_email(email)}）是否存活...")
-                            lm_service = LuckMailService(
-                                api_key=cfg.LUCKMAIL_API_KEY,
-                                proxies=proxies if getattr(cfg, 'USE_PROXY_FOR_EMAIL', True) else None
-                            )
-                            if not lm_service.check_token_alive(email_jwt):
-                                print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）邮箱 已失效，放弃当前注册并重试！")
-                                return None, None
-                        except Exception as e:
-                            print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
-                    print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）老帐号OAuth无密码登录发信...")
-                    sentinel_login_resp = _post_with_retry(
-                        s_log,
-                        "https://auth.openai.com/api/accounts/passwordless/send-otp",
-                        headers=login_send_headers, proxies=proxies, timeout=30,
-                    )
-
-                    if sentinel_login_resp.status_code != 200:
-                        print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）邮件发送异常, 返回: {sentinel_login_resp.status_code}")
-                        return None, None
-
-                    login_code_oauth = ""
-                    login_code_resp = None
-                    for login_code_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
-                        if getattr(cfg, 'GLOBAL_STOP', False): return None, None
-                        if login_code_attempt > 0:
-                            print(
-                                f"\n[{cfg.ts()}] [INFO] 老帐号OAuth 阶段未收到验证码或验证失败，正在重试 {login_code_attempt}/{cfg.MAX_OTP_RETRIES}...")
+                    resp, current_url = _follow_redirect_chain_local(s_log, oauth_log.auth_url, proxies)
+                    if "code=" in current_url and "state=" in current_url:
+                        token_resp = submit_callback_url(
+                            callback_url=current_url,
+                            code_verifier=oauth_log.code_verifier,
+                            redirect_uri=oauth_log.redirect_uri,
+                            expected_state=oauth_log.state,
+                            proxies=proxies,
+                        ), password
+                        if getattr(cfg, 'TEAM_MODE_ENABLE', False):
                             try:
-                                login_code_resend = generate_payload(did=log_did, flow="authorize_continue",
-                                                                     proxy=proxy, user_agent=current_ua,
-                                                                     impersonate="chrome110", ctx=log_ctx)
-                                resend_headers = _oai_headers(log_did, {
-                                    "Referer": "https://auth.openai.com/email-verification",
-                                    "content-type": "application/json"
-                                })
-                                if login_code_resend:
-                                    resend_headers["openai-sentinel-token"] = login_code_resend
-                                _post_with_retry(
-                                    s_log,
-                                    "https://auth.openai.com/api/accounts/email-otp/resend",
-                                    headers=resend_headers,
-                                    json_body={}, proxies=proxies, timeout=15,
-                                )
-                                time.sleep(2)
-                            except Exception as e:
-                                print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）重新发送请求异常: {e}")
-
-                        login_code_oauth = get_oai_code(email, jwt=email_jwt, proxies=proxies,
-                                                        processed_mail_ids=processed_mails)
-                        if not login_code_oauth:
-                            print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）本轮未拉取到验证码，准备重发...")
-                            continue
-
-                        login_sentinel_otp = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy,
-                                                              user_agent=current_ua,
-                                                              impersonate="chrome110", ctx=log_ctx)
-                        val_headers = _oai_headers(log_did, {
-                            "Referer": "https://auth.openai.com/email-verification",
-                            "content-type": "application/json",
-                        })
-                        if login_sentinel_otp:
-                            val_headers["openai-sentinel-token"] = login_sentinel_otp
-
-                        login_code_resp = _post_with_retry(
-                            s_log,
-                            "https://auth.openai.com/api/accounts/email-otp/validate",
-                            headers=val_headers,
-                            json_body={"code": login_code_oauth}, proxies=proxies,
-                        )
-
-                        if login_code_resp.status_code == 200:
-                            print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）老帐号OAuth 阶段验证码通过！")
-                            password = "Takeover_NoPassword"
-                            break
-                        else:
-                            try:
-                                err_json = login_code_resp.json()
+                                time.sleep(random.uniform(0.1, 0.5))
+                                sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
                             except:
-                                err_json = {}
-                            print(
-                                f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）老帐号OAuth 阶段验证失败: {login_code_resp.status_code}")
-                            print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）准备请求新的验证码并重试...")
-                            login_code_oauth = ""
-                            continue
+                                pass
+                        return token_resp, password
+                    log_did = s_log.cookies.get("oai-did") or did
 
-                    if not login_code_oauth and (login_code_resp is None or login_code_resp.status_code != 200):
-                        print(
-                            f"[{cfg.ts()}] [ERROR] 重试次数达上限 ({cfg.MAX_OTP_RETRIES} 次)，丢弃当前 {mask_email(email)} 邮箱，放弃接管。")
-                        return None, None
+                    log_ctx = reg_ctx.copy() if reg_ctx else {}
+                    log_ctx["session_id"] = str(uuid.uuid4())
+                    now_ms = int(time.time() * 1000)
+                    log_ctx["time_origin"] = float(now_ms - random.randint(20000, 300000))
 
-                    login_code_url = str(login_code_resp.json().get("continue_url") or "").strip()
-                    if login_code_url.endswith("/about-you"):
-                        _, create_account_resp = _create_account_about_you(
-                            session=s_log, email=email, did=did, current_ua=current_ua,
-                            proxy=proxy, proxies=proxies, ctx=log_ctx,
-                        )
-                        next_url = str(create_account_resp.json().get("continue_url") or "").strip()
-                    else:
-                        next_url = str(login_code_resp.json().get("continue_url") or "").strip()
-
-                    resp, current_url = _follow_redirect_chain_local(s_log, next_url, proxies)
-
-                else:
-                    pwd_page_url = str(
-                        (login_start_resp.json() if login_start_resp.status_code == 200 else {})
-                        .get("continue_url") or ""
-                    ).strip()
-                    resp, current_url = _follow_redirect_chain_local(s_log, pwd_page_url, proxies)
-
-                    sentinel_pwd_log = generate_payload(did=log_did, flow="password_verify", proxy=proxy, user_agent=current_ua,
-                                                        impersonate="chrome110", ctx=log_ctx)
-                    login_pwd_headers = _oai_headers(log_did, {
+                    sentinel_log = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy, user_agent=current_ua,
+                                                    impersonate="chrome110", ctx=log_ctx)
+                    log_start_headers = _oai_headers(log_did, {
                         "Referer": current_url,
                         "content-type": "application/json",
                     })
-                    if sentinel_pwd_log:
-                        login_pwd_headers["openai-sentinel-token"] = sentinel_pwd_log
+                    if sentinel_log:
+                        log_start_headers["openai-sentinel-token"] = sentinel_log
 
-                    pwd_login_resp = _post_with_retry(
+                    login_start_resp = _post_with_retry(
                         s_log,
-                        "https://auth.openai.com/api/accounts/password/verify",
-                        headers=login_pwd_headers,
-                        json_body={"password": password}, proxies=proxies,
+                        "https://auth.openai.com/api/accounts/authorize/continue",
+                        headers=log_start_headers,
+                        json_body={"username": {"value": email, "kind": "email"}},
+                        proxies=proxies, allow_redirects=False,
                     )
 
-                    if pwd_login_resp.status_code != 200:
-                        print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）最终静默登录验证失败: HTTP {pwd_login_resp.status_code}")
+                    if login_start_resp.status_code != 200:
+                        print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）登录环节第一步请求被拒: HTTP {login_start_resp.status_code}")
                         return None, None
 
-                    pwd_json = pwd_login_resp.json()
-                    next_url = _extract_next_url(pwd_json)
-                    resp, current_url = _follow_redirect_chain_local(s_log, next_url, proxies)
-
-                    if current_url.endswith("/email-verification"):
+                    if is_takeover:
+                        # log_send_headers = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy, user_agent=current_ua,
+                        #                                   impersonate="chrome110", ctx=log_ctx)
+                        # login_send_headers = _oai_headers(log_did, {
+                        #     "Referer": "https://auth.openai.com/email-verification",
+                        #     "content-type": "application/json",
+                        # })
+                        # if log_send_headers: login_send_headers["openai-sentinel-token"] = log_send_headers
                         if cfg.EMAIL_API_MODE == "luckmail":
                             try:
                                 from utils.email_providers.luckmail_service import LuckMailService
@@ -725,158 +665,335 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                                     return None, None
                             except Exception as e:
                                 print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
+                        print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）无密码通道OAuth登录发信...")
+                        # sentinel_login_resp = _post_with_retry(
+                        #     s_log,
+                        #     "https://auth.openai.com/api/accounts/passwordless/send-otp",
+                        #     headers=login_send_headers, proxies=proxies, timeout=30,
+                        # )
+                        #
+                        # if sentinel_login_resp.status_code != 200:
+                        #     print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）邮件发送异常, 返回: {sentinel_login_resp.status_code}")
+                        #     return None, None
 
-                        print(f"\n[{cfg.ts()}] [INFO] （{mask_email(email)}）静默登录需要验证码，主动触发发送...")
-
-                        code2 = ""
-                        code2_resp = None
-                        for resend_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
+                        login_code_oauth = ""
+                        login_code_resp = None
+                        for login_code_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
                             if getattr(cfg, 'GLOBAL_STOP', False): return None, None
-                            if resend_attempt > 0:
+                            if login_code_attempt > 0:
                                 print(
-                                    f"\n[{cfg.ts()}] [INFO] （{mask_email(email)}）二次安全验证未收到验证码或校验失败，正在重试 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
+                                    f"\n[{cfg.ts()}] [INFO] （{mask_email(email)}）无密码通道OAuth 阶段未收到验证码或验证失败，正在重试 {login_code_attempt}/{cfg.MAX_OTP_RETRIES}...")
                                 try:
-                                    sentinel_log_resend = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy,
-                                                                           user_agent=current_ua, impersonate="chrome110", ctx=log_ctx)
-                                    log_resend_headers = _oai_headers(log_did, {
+                                    login_code_resend = generate_payload(did=log_did, flow="authorize_continue",
+                                                                         proxy=proxy, user_agent=current_ua,
+                                                                         impersonate="chrome110", ctx=log_ctx)
+                                    resend_headers = _oai_headers(log_did, {
                                         "Referer": "https://auth.openai.com/email-verification",
                                         "content-type": "application/json"
                                     })
-                                    if sentinel_log_resend:
-                                        log_resend_headers["openai-sentinel-token"] = sentinel_log_resend
+                                    if login_code_resend:
+                                        resend_headers["openai-sentinel-token"] = login_code_resend
                                     _post_with_retry(
                                         s_log,
-                                        "https://auth.openai.com/api/accounts/email-otp/send",
-                                        headers=log_resend_headers,
+                                        "https://auth.openai.com/api/accounts/email-otp/resend",
+                                        headers=resend_headers,
                                         json_body={}, proxies=proxies, timeout=15,
                                     )
                                     time.sleep(2)
                                 except Exception as e:
-                                    print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）重新发送请求异常: {e}")
-                            code2 = get_oai_code(email, jwt=email_jwt, proxies=proxies,
-                                                 processed_mail_ids=processed_mails)
+                                    print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）无密码通道重新发送请求异常: {e}")
 
-                            if not code2:
-                                print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）本轮未拉取到二次安全验证码，准备重发...")
+                            login_code_oauth = get_oai_code(email, jwt=email_jwt, proxies=proxies,
+                                                            processed_mail_ids=processed_mails)
+                            if not login_code_oauth:
+                                print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）无密码通道本轮未拉取到验证码，准备重发...")
                                 continue
 
-                            sentinel_otp2 = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy,
-                                                             user_agent=current_ua, impersonate="chrome110", ctx=log_ctx)
-                            val2_headers = _oai_headers(log_did, {
+                            login_sentinel_otp = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy,
+                                                                  user_agent=current_ua,
+                                                                  impersonate="chrome110", ctx=log_ctx)
+                            val_headers = _oai_headers(log_did, {
                                 "Referer": "https://auth.openai.com/email-verification",
                                 "content-type": "application/json",
                             })
-                            if sentinel_otp2:
-                                val2_headers["openai-sentinel-token"] = sentinel_otp2
+                            if login_sentinel_otp:
+                                val_headers["openai-sentinel-token"] = login_sentinel_otp
 
-                            code2_resp = _post_with_retry(
+                            login_code_resp = _post_with_retry(
                                 s_log,
                                 "https://auth.openai.com/api/accounts/email-otp/validate",
-                                headers=val2_headers,
-                                json_body={"code": code2}, proxies=proxies,
+                                headers=val_headers,
+                                json_body={"code": login_code_oauth}, proxies=proxies,
                             )
 
-                            if code2_resp.status_code == 200:
-                                print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）二次安全验证 OTP 校验通过！")
+                            if login_code_resp.status_code == 200:
+                                print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）无密码通道OAuth阶段验证码通过！")
+                                password = "Takeover_NoPassword"
                                 break
                             else:
+                                try:
+                                    err_json = login_code_resp.json()
+                                except:
+                                    err_json = {}
                                 print(
-                                    f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）二次安全验证 OTP 校验失败: {code2_resp.status_code}")
-                                print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）准备请求新的二次安全验证码并重试...")
-                                code2 = ""
+                                    f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）无密码通道OAuth 阶段验证失败: {login_code_resp.status_code}")
+                                print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）无密码通道准备请求新的验证码并重试...")
+                                login_code_oauth = ""
                                 continue
-                        if not code2 and (code2_resp is None or code2_resp.status_code != 200):
-                            print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）重试次数达上限，二次安全验证彻底失败，放弃接管。")
+
+                        if not login_code_oauth and (login_code_resp is None or login_code_resp.status_code != 200):
+                            print(
+                                f"[{cfg.ts()}] [ERROR] 无密码通道重试次数达上限 ({cfg.MAX_OTP_RETRIES} 次)，丢弃当前 {mask_email(email)} 邮箱，放弃接管。")
+                            if run_ctx is not None:
+                                run_ctx['discarded_email_failure'] = True
+                                run_ctx['mail_domain_failure_reason'] = 'discarded_email'
                             return None, None
 
-                        next_url = str(code2_resp.json().get("continue_url") or "").strip()
+                        login_code_url = str(login_code_resp.json().get("continue_url") or "").strip()
+                        if login_code_url.endswith("/about-you"):
+                            _, create_account_resp = _create_account_about_you(
+                                session=s_log, email=email, did=did, current_ua=current_ua,
+                                proxy=proxy, proxies=proxies, ctx=log_ctx,
+                            )
+                            next_url = str(create_account_resp.json().get("continue_url") or "").strip()
+                        else:
+                            next_url = str(login_code_resp.json().get("continue_url") or "").strip()
+
                         resp, current_url = _follow_redirect_chain_local(s_log, next_url, proxies)
 
-                url_code = ""
-                error_reason = ""
-                while True:
-                    if "code=" in current_url:
-                        return submit_callback_url(
-                            callback_url=current_url,
-                            code_verifier=oauth_log.code_verifier,
-                            redirect_uri=oauth_log.redirect_uri,
-                            expected_state=oauth_log.state,
-                            proxies=proxies,
-                        ), password
-                    elif current_url.endswith("/about-you"):
-                        _, create_account_resp = _create_account_about_you(
-                            session=s_log, email=email, did=did, current_ua=current_ua,
-                            proxy=proxy, proxies=proxies, ctx=log_ctx,
+                    else:
+                        pwd_page_url = str(
+                            (login_start_resp.json() if login_start_resp.status_code == 200 else {})
+                            .get("continue_url") or ""
+                        ).strip()
+                        resp, current_url = _follow_redirect_chain_local(s_log, pwd_page_url, proxies)
+
+                        sentinel_pwd_log = generate_payload(did=log_did, flow="password_verify", proxy=proxy, user_agent=current_ua,
+                                                            impersonate="chrome110", ctx=log_ctx)
+                        login_pwd_headers = _oai_headers(log_did, {
+                            "Referer": current_url,
+                            "content-type": "application/json",
+                        })
+                        if sentinel_pwd_log:
+                            login_pwd_headers["openai-sentinel-token"] = sentinel_pwd_log
+
+                        pwd_login_resp = _post_with_retry(
+                            s_log,
+                            "https://auth.openai.com/api/accounts/password/verify",
+                            headers=login_pwd_headers,
+                            json_body={"password": password}, proxies=proxies,
                         )
-                        url_code = create_account_resp.json()
-                        current_url = str(create_account_resp.json().get("continue_url") or "").strip()
-                        continue
-                    if current_url.endswith("/consent") or current_url.endswith("/workspace"):
-                        auth_cookie2 = s_log.cookies.get("oai-client-auth-session") or ""
-                        workspaces2 = _parse_workspace_from_auth_cookie(auth_cookie2)
-                        if workspaces2:
-                            select_resp = _post_with_retry(
-                                s_log,
-                                "https://auth.openai.com/api/accounts/workspace/select",
-                                headers=_oai_headers(s_log.cookies.get("oai-did") or "", {
-                                    "Referer": current_url, "content-type": "application/json"
-                                }),
-                                json_body={"workspace_id": str(workspaces2[0].get("id"))},
+
+                        if pwd_login_resp.status_code != 200:
+                            print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）最终静默登录验证失败: HTTP {pwd_login_resp.status_code}")
+                            return None, None
+
+                        pwd_json = pwd_login_resp.json()
+                        next_url = _extract_next_url(pwd_json)
+                        resp, current_url = _follow_redirect_chain_local(s_log, next_url, proxies)
+
+                        if current_url.endswith("/email-verification"):
+                            if cfg.EMAIL_API_MODE == "luckmail":
+                                try:
+                                    from utils.email_providers.luckmail_service import LuckMailService
+                                    print(f"[{cfg.ts()}] [INFO] 正在检测 LuckMail 邮箱（{mask_email(email)}）是否存活...")
+                                    lm_service = LuckMailService(
+                                        api_key=cfg.LUCKMAIL_API_KEY,
+                                        proxies=proxies if getattr(cfg, 'USE_PROXY_FOR_EMAIL', True) else None
+                                    )
+                                    if not lm_service.check_token_alive(email_jwt):
+                                        print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）邮箱 已失效，放弃当前注册并重试！")
+                                        return None, None
+                                except Exception as e:
+                                    print(f"[{cfg.ts()}] [WARNING] LuckMail 可用性检测异常(忽略并继续): {e}")
+
+                            print(f"\n[{cfg.ts()}] [INFO] （{mask_email(email)}）静默登录需要验证码，主动触发发送...")
+
+                            code2 = ""
+                            code2_resp = None
+                            for resend_attempt in range(max(1, cfg.MAX_OTP_RETRIES)):
+                                if getattr(cfg, 'GLOBAL_STOP', False): return None, None
+                                if resend_attempt > 0:
+                                    print(
+                                        f"\n[{cfg.ts()}] [INFO] （{mask_email(email)}）二次安全验证未收到验证码或校验失败，正在重试 {resend_attempt}/{cfg.MAX_OTP_RETRIES}...")
+                                    try:
+                                        sentinel_log_resend = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy,
+                                                                               user_agent=current_ua, impersonate="chrome110", ctx=log_ctx)
+                                        log_resend_headers = _oai_headers(log_did, {
+                                            "Referer": "https://auth.openai.com/email-verification",
+                                            "content-type": "application/json"
+                                        })
+                                        if sentinel_log_resend:
+                                            log_resend_headers["openai-sentinel-token"] = sentinel_log_resend
+                                        _post_with_retry(
+                                            s_log,
+                                            "https://auth.openai.com/api/accounts/email-otp/send",
+                                            headers=log_resend_headers,
+                                            json_body={}, proxies=proxies, timeout=15,
+                                        )
+                                        time.sleep(2)
+                                    except Exception as e:
+                                        print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）重新发送请求异常: {e}")
+                                code2 = get_oai_code(email, jwt=email_jwt, proxies=proxies,
+                                                     processed_mail_ids=processed_mails)
+
+                                if not code2:
+                                    print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）本轮未拉取到二次安全验证码，准备重发...")
+                                    continue
+
+                                sentinel_otp2 = generate_payload(did=log_did, flow="authorize_continue", proxy=proxy,
+                                                                 user_agent=current_ua, impersonate="chrome110", ctx=log_ctx)
+                                val2_headers = _oai_headers(log_did, {
+                                    "Referer": "https://auth.openai.com/email-verification",
+                                    "content-type": "application/json",
+                                })
+                                if sentinel_otp2:
+                                    val2_headers["openai-sentinel-token"] = sentinel_otp2
+
+                                code2_resp = _post_with_retry(
+                                    s_log,
+                                    "https://auth.openai.com/api/accounts/email-otp/validate",
+                                    headers=val2_headers,
+                                    json_body={"code": code2}, proxies=proxies,
+                                )
+
+                                if code2_resp.status_code == 200:
+                                    print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）二次安全验证 OTP 校验通过！")
+                                    break
+                                else:
+                                    print(
+                                        f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）二次安全验证 OTP 校验失败: {code2_resp.status_code}")
+                                    print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）准备请求新的二次安全验证码并重试...")
+                                    code2 = ""
+                                    continue
+                            if not code2 and (code2_resp is None or code2_resp.status_code != 200):
+                                print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}）重试次数达上限，二次安全验证彻底失败，放弃接管。")
+                                return None, None
+
+                            next_url = str(code2_resp.json().get("continue_url") or "").strip()
+                            resp, current_url = _follow_redirect_chain_local(s_log, next_url, proxies)
+
+                    url_code = ""
+                    error_reason = ""
+                    oauth_needs_retry = False
+                    while True:
+                        if "code=" in current_url:
+                            token_resp = submit_callback_url(
+                                callback_url=current_url,
+                                code_verifier=oauth_log.code_verifier,
+                                redirect_uri=oauth_log.redirect_uri,
+                                expected_state=oauth_log.state,
                                 proxies=proxies,
                             )
-                            final_url = (
-                                _extract_next_url(select_resp.json())
-                                if select_resp.status_code == 200 else ""
+                            if getattr(cfg, 'TEAM_MODE_ENABLE', False):
+                                try:
+                                    time.sleep(random.uniform(0.1, 0.5))
+                                    sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+                                except:
+                                    pass
+                            return token_resp, password
+                        elif current_url.endswith("/about-you"):
+                            _, create_account_resp = _create_account_about_you(
+                                session=s_log, email=email, did=did, current_ua=current_ua,
+                                proxy=proxy, proxies=proxies, ctx=log_ctx,
                             )
-                            _, final_loc = _follow_redirect_chain_local(s_log, final_url, proxies)
-                            current_url = final_loc
+                            url_code = create_account_resp.json()
+                            current_url = str(create_account_resp.json().get("continue_url") or "").strip()
                             continue
-                        else:
-                            break
-                    elif "/add-phone" in current_url:
-                        print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}） OAuth链路触发风控，进入手机号验证...")
-                        if getattr(cfg, 'SMSBOWER_ENABLED', False):
-                            provider_name = "SmsBower"
-                            ok, next_url_or_reason = handle_smsbower_verification(
-                                session=s_log, proxies=proxies, hint_url=current_url
-                            )
-                        elif getattr(cfg, 'HERO_SMS_ENABLED', False):
-                            provider_name = "HeroSMS"
-                            ok, next_url_or_reason = _try_verify_phone_via_hero_sms(
-                                session=s_log, proxies=proxies, hint_url=current_url
-                            )
-                        elif getattr(cfg, 'FIVESIM_ENABLED', False):
-                            provider_name = "5SIM"
-                            ok, next_url_or_reason = try_verify_phone_via_fivesim(
-                                session=s_log, proxies=proxies, hint_url=current_url
-                            )
-                        else:
-                            break
-                        if ok and next_url_or_reason:
-                            print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}） {provider_name} 手机验证成功，继续创建账号")
-                            current_url = next_url_or_reason
-                            continue
-                        else:
-                            print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}） {provider_name}验证失败: {next_url_or_reason}")
-                            error_reason = next_url_or_reason
-                            break
-                    else:
-                        break
+                        if current_url.endswith("/consent") or current_url.endswith("/workspace"):
+                            auth_cookie2 = s_log.cookies.get("oai-client-auth-session") or ""
+                            workspaces2 = _parse_workspace_from_auth_cookie(auth_cookie2)
+                            if workspaces2:
+                                print(f"[{cfg.ts()}] [SUCCESS] （{mask_email(email)}）检测到工作区，正在确认并提取最终凭据...")
+                                personal_ws_id2 = ""
+                                for i, ws in enumerate(workspaces2):
+                                    ws_id = str(ws.get("id", ""))
+                                    ws_title = str(ws.get("title", ws.get("name", "Unknown")))
+                                    if "Personal" in ws_title or "个人" in ws_title or ws.get("is_personal"):
+                                        personal_ws_id2 = ws_id
 
-                if run_ctx is not None: run_ctx['phone_verify'] = True
-                try:
-                    url_code = url_code.get("error", {}).get("code")
-                except Exception as e:
-                    pass
-                if "identity_provider_mismatch" in url_code:
-                    url_code = "当前账号被阻断"
-                else:
-                    url_code = "未开启接码开关，不接码可忽略该条提示"
-                if not error_reason:
-                    error_reason = url_code
-                print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}） OAuth 授权链路追踪失败！当前死在网页: {current_url}")
-                print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}） 阻断原因: {error_reason}")
-                return None, None
+                                if not personal_ws_id2:
+                                    personal_ws_id2 = str(workspaces2[-1].get("id", ""))
+
+                                select_resp = _post_with_retry(
+                                    s_log, "https://auth.openai.com/api/accounts/workspace/select",
+                                    headers=_oai_headers(s_log.cookies.get("oai-did") or "",
+                                                         {"Referer": current_url, "content-type": "application/json"}),
+                                    json_body={"workspace_id": personal_ws_id2}, proxies=proxies,
+                                )
+                                final_url = _extract_next_url(select_resp.json()) if select_resp.status_code == 200 else ""
+                                _, final_loc = _follow_redirect_chain_local(s_log, final_url, proxies)
+                                current_url = final_loc
+                                if getattr(cfg, 'TEAM_MODE_ENABLE', False):
+                                    try:
+                                        time.sleep(random.uniform(0.1, 0.5))
+                                        sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+                                    except:
+                                        pass
+                                continue
+                            else:
+                                break
+                        elif "/add-phone" in current_url:
+                            if oauth_attempt == 0 and getattr(cfg, 'TEAM_MODE_ENABLE', False):
+                                print(
+                                    f"[{cfg.ts()}] [WARNING] （{mask_email(email)}） OAuth重试中...")
+                                oauth_needs_retry = True
+                                break
+                            print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}） OAuth链路触发风控，进入手机号验证...")
+                            if getattr(cfg, 'SMSBOWER_ENABLED', False):
+                                provider_name = "SmsBower"
+                                ok, next_url_or_reason = handle_smsbower_verification(
+                                    session=s_log, proxies=proxies, hint_url=current_url, device_id=did , user_agent=current_ua , run_ctx=reg_ctx, proxy=proxy
+                                )
+                            elif getattr(cfg, 'HERO_SMS_ENABLED', False):
+                                provider_name = "HeroSMS"
+                                ok, next_url_or_reason = _try_verify_phone_via_hero_sms(
+                                    session=s_log, proxies=proxies, hint_url=current_url, device_id=did , user_agent=current_ua , run_ctx=reg_ctx, proxy=proxy
+                                )
+                            elif getattr(cfg, 'FIVESIM_ENABLED', False):
+                                provider_name = "5SIM"
+                                ok, next_url_or_reason = try_verify_phone_via_fivesim(
+                                    session=s_log, proxies=proxies, hint_url=current_url, device_id=did , user_agent=current_ua , run_ctx=reg_ctx, proxy=proxy
+                                )
+                            else:
+                                break
+                            if ok and next_url_or_reason:
+                                print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}） {provider_name} 手机验证成功，继续获取凭证")
+                                current_url = next_url_or_reason
+                                continue
+                            else:
+                                print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}） {provider_name}验证失败: {next_url_or_reason}")
+                                error_reason = next_url_or_reason
+                                break
+                        else:
+                            break
+                    if oauth_needs_retry:
+                        try:
+                            s_log.close()
+                        except:
+                            pass
+                        continue
+
+                    if getattr(cfg, 'TEAM_MODE_ENABLE', False):
+                        try:
+                            time.sleep(random.uniform(0.1, 0.5))
+                            sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+                        except:
+                            pass
+                    if run_ctx is not None: run_ctx['phone_verify'] = True
+                    try:
+                        url_code = url_code.get("error", {}).get("code")
+                    except Exception as e:
+                        pass
+                    if "identity_provider_mismatch" in url_code:
+                        url_code = "当前账号被阻断"
+                    else:
+                        url_code = "未开启接码开关，不接码可忽略该条提示"
+                    if not error_reason:
+                        error_reason = url_code
+                    print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}） OAuth 授权链路追踪失败！当前死在网页: {current_url}")
+                    print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}） 阻断原因: {error_reason}")
+                    return None, None
 
             except Exception as e:
                 print(f"[{cfg.ts()}] [ERROR] （{mask_email(email)}） 注册主流程发生严重异常: {e}")
@@ -887,13 +1004,19 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                 return None, None
         return None, None
     finally:
+        if getattr(cfg, 'TEAM_MODE_ENABLE', False):
+            try:
+                time.sleep(random.uniform(0.1, 0.5))
+                sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+            except Exception:
+                pass
         if s_reg is not None:
             try:
                 s_reg.close()
-            except:
+            except Exception:
                 pass
         if s_log is not None:
             try:
                 s_log.close()
-            except:
+            except Exception:
                 pass

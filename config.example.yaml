@@ -12,6 +12,12 @@ email_api_mode: "cloudflare_temp_email"
 # 你的域名 (支持逗号分隔多域名随机轮换) 如果只有一个域名就只填一个域名
 
 mail_domains: "domain1.com,domain2.xyz,domain3.net"
+disabled_mail_domains: []
+enable_mail_domain_runtime_control: false
+mail_domain_failure_types:
+  - discarded_email
+mail_domain_fail_threshold: 3
+mail_domain_fail_cooldown_sec: 600
 
 #二级域名开关
 enable_sub_domains: false
@@ -210,6 +216,8 @@ warp_proxy_list:
 
 # [验证码重发次数配置，默认5次]
 max_otp_retries: 5
+# 验证码轮询次数
+otp_poll_max_attempts: 20
 
 # [邮箱代理专项配置]
 # 【开关】true 表示获取邮箱（谷歌）也用代理，false 表示直连（推荐先试 false）如果是国外服务器此项可以保持false
@@ -281,6 +289,13 @@ sub2api_mode:
   #是否保存仅注册账号，用于后续手动登录或者其他作用
   retain_reg_only: false
 
+image2api_mode:
+  enable: false
+  api_url: ""
+  api_key: ""
+  retain_reg_only: true
+  img_only_mode: false
+
 hero_sms:
   enabled: false
   api_key: 
@@ -311,6 +326,7 @@ smsbower:
   max_tries: 3
   poll_timeout_sec: 120
   reuse_max: 2
+  operator: ""
 
 fivesim:
   enabled: false
@@ -326,6 +342,7 @@ fivesim:
   max_tries: 3
   poll_timeout_sec: 180
   reuse_max: 2
+  operator: ""
 
 # 常规量产模式专属配置
 normal_mode:
@@ -335,6 +352,8 @@ normal_mode:
   sleep_max: 30
   # 单次(每批)执行的注册总数
   target_count: 2
+  # 是否保存提取的 image2api 数据到本地库
+  save_img_to_local: false
 
 tg_bot:
   enable: false
@@ -352,6 +371,9 @@ database:
     user: "root"
     password: ""
     db_name: "wenfxl_manager"
+
+team_mode:
+  enable: false
 
 # WEB端密码
 web_password: admin

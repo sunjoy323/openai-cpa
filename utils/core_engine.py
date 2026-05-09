@@ -387,9 +387,13 @@ def test_cliproxy_auth_file(item: dict, api_url: str, api_token: str) -> Tuple[b
 def test_sub2api_account_direct(item: dict, proxy: str) -> Tuple[bool, str]:
     """直连 OpenAI 接口进行 Sub2API 账号测活，并实时提取真实额度"""
     credentials = item.get("credentials", {})
+    platform = item.get("platform", "")
     access_token = credentials.get("access_token")
     account_id = credentials.get("chatgpt_account_id", "")
-    
+    plan_type = credentials.get("plan_type", "")
+    if platform != "openai" or plan_type != "free":
+        return True, "非 OpenAI 免费号，跳过直连测活"
+
     if not access_token:
         return False, "缺少 access_token"
         
@@ -437,10 +441,15 @@ def test_sub2api_account_direct(item: dict, proxy: str) -> Tuple[bool, str]:
 def process_account_worker(i: int, total: int, item: dict, args: Any) -> bool:
     if hasattr(args, 'check_stop') and args.check_stop(): return False
     name        = item.get("name")
+    email = name.replace(".json", "")
     is_disabled = item.get("disabled", False)
     is_ok, msg  = test_cliproxy_auth_file(item, cfg.CPA_API_URL, cfg.CPA_API_TOKEN)
 
     if is_ok:
+        try:
+            db_manager.update_account_status([email], 1)
+        except Exception:
+            pass
         if is_disabled:
             can_reenable, reason = _should_reenable_cpa_account(
                 item.get("_raw_usage"), cfg.MIN_REMAINING_WEEKLY_PERCENT
@@ -462,12 +471,21 @@ def process_account_worker(i: int, total: int, item: dict, args: Any) -> bool:
 
     if "周限额" in msg or "usage_limit_reached" in msg:
         if cfg.REMOVE_ON_LIMIT_REACHED:
+            try:
+                db_manager.update_account_status([email], 0)
+            except Exception:
+                pass
             print(f"[{ts()}] [INFO] 触发限额剔除规则，执行物理剔除...")
             requests.delete(
                 _normalize_cpa_auth_files_url(cfg.CPA_API_URL),
                 headers={"Authorization": f"Bearer {cfg.CPA_API_TOKEN}"},
                 params={"name": name},
             )
+            try:
+                db_manager.remove_account_push_platform(name, "CPA", exact_match=True)
+                print(f"[{ts()}] [系统] 已同步清除 {mask_email(name)} 本地的 CPA 平台推送状态")
+            except Exception:
+                pass
         elif not is_disabled:
             print(f"[{ts()}] [INFO] 测活: 凭证额度耗尽，正在禁用...")
             ok = set_cpa_auth_file_status(cfg.CPA_API_URL, cfg.CPA_API_TOKEN, name, disabled=True)
@@ -480,6 +498,10 @@ def process_account_worker(i: int, total: int, item: dict, args: Any) -> bool:
         return False
 
     if not cfg.ENABLE_TOKEN_REVIVE:
+        try:
+            db_manager.update_account_status([email], 0)
+        except Exception:
+            pass
         print(f"[{ts()}] [INFO] 检测到 Token 已失效，但【复活】已关闭，仅记录状态。")
         _handle_dead_account(name, is_disabled)
         return False
@@ -524,6 +546,10 @@ def process_account_worker(i: int, total: int, item: dict, args: Any) -> bool:
                 if is_ok2:
                     refresh_success = True
                     print(f"[{ts()}] [SUCCESS] 测活: {mask_email(name)} 刷新后复活成功！")
+                    try:
+                        db_manager.update_account_status([email], 1)
+                    except Exception:
+                        pass
                 else:
                     print(f"[{ts()}] [WARNING] {mask_email(name)} 刷新后二次测活依然失败({msg2})")
             else:
@@ -535,6 +561,10 @@ def process_account_worker(i: int, total: int, item: dict, args: Any) -> bool:
         print(f"[{ts()}] [WARNING] {mask_email(name)} 未找到有效数据，无法抢救")
 
     if not refresh_success:
+        try:
+            db_manager.update_account_status([email], 0)
+        except Exception:
+            pass
         _handle_dead_account(name, is_disabled)
     return refresh_success
 
@@ -548,6 +578,11 @@ def _handle_dead_account(name: str, is_disabled: bool) -> None:
             headers={"Authorization": f"Bearer {cfg.CPA_API_TOKEN}"},
             params={"name": name},
         )
+        try:
+            db_manager.remove_account_push_platform(name, "CPA", exact_match=True)
+            print(f"[{ts()}] [系统] 已同步清除 {mask_email(name)} 本地的 CPA 平台推送状态")
+        except Exception:
+            pass
     elif not is_disabled:
         print(f"[{ts()}] [INFO] 凭证 {mask_email(name)} 死亡，根据配置保留，正在禁用...")
         if set_cpa_auth_file_status(cfg.CPA_API_URL, cfg.CPA_API_TOKEN, name, disabled=True):
@@ -556,6 +591,14 @@ def _handle_dead_account(name: str, is_disabled: bool) -> None:
         print(f"[{ts()}] [WARNING] 凭证 {mask_email(name)} 已死亡，当前已是禁用状态，根据配置保留不删除。")
 
 def handle_registration_result(result: Any, cpa_upload: bool = False, run_ctx: dict = None) -> str:
+    def _format_cooldown_time(cooldown_until: float) -> str:
+        if not cooldown_until:
+            return ""
+        try:
+            return datetime.fromtimestamp(float(cooldown_until)).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return ""
+
     if getattr(cfg, 'GLOBAL_STOP', False):
         return "stopped"
     global run_stats
@@ -596,7 +639,10 @@ def handle_registration_result(result: Any, cpa_upload: bool = False, run_ctx: d
         token_json_str, password = result
         
     ret_status = "success"
-     
+    discarded_email_failure = run_ctx.get('discarded_email_failure', False) if run_ctx else False
+    domain_failure_reason = str(run_ctx.get('mail_domain_failure_reason', '') or '').strip().lower() if run_ctx else ''
+    domain_failure_event = mail_service.pop_last_domain_failure_event()
+
     if not token_json_str or token_json_str == "retry_403":
         if token_json_str == "retry_403":
             with _stats_lock: run_stats["retries"] += 1
@@ -604,15 +650,33 @@ def handle_registration_result(result: Any, cpa_upload: bool = False, run_ctx: d
             ret_status = "retry_403"
         else:
             with _stats_lock: run_stats["failed"] += 1
+            failure_domain = cur_dom
+            failure_reason = domain_failure_reason
+            if not failure_reason and discarded_email_failure:
+                failure_reason = 'discarded_email'
+            if not failure_reason and domain_failure_event:
+                failure_reason = str(domain_failure_event.get('reason') or '').strip().lower()
+                failure_domain = domain_failure_event.get('domain') or failure_domain
+            if failure_reason:
+                domain_result = mail_service.record_domain_failure(failure_domain, failure_reason)
+                if domain_result:
+                    cooldown_text = _format_cooldown_time(domain_result.get("cooldown_until", 0.0))
+                    extra_text = f"，冷却结束时间: {cooldown_text}" if cooldown_text else ""
+                    print(f"[{ts()}] [INFO] 失败域名 {mask_email(domain_result.get('domain', failure_domain or ''))} -> 异常 {domain_result.get('fail_count', 0)} / 成功 {domain_result.get('success_count', 0)} / 原因 {failure_reason}{extra_text}")
             ret_status = "failed"
         if cfg.ENABLE_SUB_DOMAINS:
-            mail_service.clear_sticky_domain() 
+            mail_service.clear_sticky_domain()
             print(f"[{ts()}] [系统] 域名 {mask_email(cur_dom or '')} 注册失败，下一轮重新生成。")
-            
+
     else:
         with _stats_lock: run_stats["success"] += 1
         token_data    = json.loads(token_json_str)
         account_email = token_data.get("email", "unknown")
+        domain_result = mail_service.record_domain_success(account_email if account_email and "@" in account_email else cur_dom)
+        if domain_result:
+            cooldown_text = _format_cooldown_time(domain_result.get("cooldown_until", 0.0))
+            extra_text = f"，冷却结束时间: {cooldown_text}" if cooldown_text else ""
+            print(f"[{ts()}] [INFO] 成功域名 {mask_email(domain_result.get('domain', cur_dom or ''))} -> 失败 {domain_result.get('fail_count', 0)} / 成功 {domain_result.get('success_count', 0)}{extra_text}")
 
         # 存入本地数据库
         if cpa_upload:
@@ -837,7 +901,12 @@ def _handle_sub2api_dead_account(item: dict, client: Any, is_disabled: bool) -> 
     if cfg.SUB2API_REMOVE_DEAD_ACCOUNTS:
         print(f"[{ts()}] [ERROR] 凭证 {mask_email(name)} 彻底死亡，执行物理剔除...")
         if hasattr(client, "delete_account") and account_id:
-            client.delete_account(account_id) 
+            client.delete_account(account_id)
+        try:
+            db_manager.remove_account_push_platform(name, "SUB2API", exact_match=False)
+            print(f"[{ts()}] [系统] 已同步清除 {mask_email(name)} 本地的 Sub2API 平台推送状态")
+        except Exception:
+            pass
     elif not is_disabled:
         print(f"[{ts()}] [ERROR] 凭证 {mask_email(name)} 死亡，根据配置保留，正在禁用...")
         if hasattr(client, "set_account_status") and account_id:
@@ -848,6 +917,9 @@ def _handle_sub2api_dead_account(item: dict, client: Any, is_disabled: bool) -> 
 def process_sub2api_worker(i: int, total: int, item: dict, client: Any, args: Any) -> bool:
     """Sub2API 测活 Worker（使用 Sub2API /test SSE 接口）"""
     if hasattr(args, 'check_stop') and args.check_stop(): return False
+    creds = item.get("credentials", {})
+    if item.get("platform") != "openai" or str(creds.get("plan_type", "free")).lower() != "free":
+        return True
     name = item.get("name", "unknown")
     account_id = item.get("id")
     result, reason = client.test_account(account_id)
@@ -855,9 +927,17 @@ def process_sub2api_worker(i: int, total: int, item: dict, client: Any, args: An
     if result == "ok":
         print(f"[{ts()}] [SUCCESS] Sub2API测活: {mask_email(name)} 状态健康")
         client.set_account_status(account_id, disabled=False)
+        try:
+            db_manager.update_account_status_by_truncated_name(name, 1)
+        except Exception:
+            pass
         return True
 
     if result == "quota":
+        try:
+            db_manager.update_account_status_by_truncated_name(name, 0)
+        except Exception:
+            pass
         if cfg.SUB2API_REMOVE_ON_LIMIT_REACHED:
             print(f"[{ts()}] [WARNING] Sub2API测活: {mask_email(name)} 额度耗尽，执行物理删除...")
             if account_id:
@@ -869,12 +949,20 @@ def process_sub2api_worker(i: int, total: int, item: dict, client: Any, args: An
     print(f"[{ts()}] [ERROR] Sub2API测活: {mask_email(name)} 测活失败 ({reason})")
 
     if not cfg.SUB2API_ENABLE_TOKEN_REVIVE:
+        try:
+            db_manager.update_account_status_by_truncated_name(name, 0)
+        except Exception:
+            pass
         print(f"[{ts()}] [ERROR] Token 复活已关闭，直接执行死亡处理")
         _handle_sub2api_dead_account(item, client, is_disabled=False)
         return False
 
     refresh_token_val = item.get("credentials", {}).get("refresh_token")
     if not refresh_token_val:
+        try:
+            db_manager.update_account_status_by_truncated_name(name, 0)
+        except Exception:
+            pass
         print(f"[{ts()}] [ERROR] {mask_email(name)} 无 refresh_token，执行死亡处理")
         _handle_sub2api_dead_account(item, client, is_disabled=False)
         return False
@@ -886,6 +974,10 @@ def process_sub2api_worker(i: int, total: int, item: dict, client: Any, args: An
     if not ok:
         err_info = new_tokens.get('error', '未知') if isinstance(new_tokens, dict) else str(new_tokens)
         print(f"[{ts()}] [ERROR] {mask_email(name)} Token 刷新失败: {err_info}")
+        try:
+            db_manager.update_account_status_by_truncated_name(name, 0)
+        except Exception:
+            pass
         _handle_sub2api_dead_account(item, client, is_disabled=False)
         return False
 
@@ -895,6 +987,10 @@ def process_sub2api_worker(i: int, total: int, item: dict, client: Any, args: An
     if not up_ok:
         print(f"[{ts()}] [ERROR] {mask_email(name)} 更新回 Sub2API 失败: {up_msg}")
         _handle_sub2api_dead_account(item, client, is_disabled=False)
+        try:
+            db_manager.update_account_status_by_truncated_name(name, 0)
+        except Exception:
+            pass
         return False
 
     print(f"[{ts()}] [INFO] {mask_email(name)} Token 已更新，二次验证中...")
@@ -902,9 +998,17 @@ def process_sub2api_worker(i: int, total: int, item: dict, client: Any, args: An
 
     if result2 == "ok":
         print(f"[{ts()}] [SUCCESS] {mask_email(name)} 刷新复活成功，二次验证通过！")
+        try:
+            db_manager.update_account_status_by_truncated_name(name, 1)
+        except Exception:
+            pass
         return True
 
     print(f"[{ts()}] [ERROR] {mask_email(name)} 二次验证失败 ({reason2})，账号确认已死")
+    try:
+        db_manager.update_account_status_by_truncated_name(name, 0)
+    except Exception:
+        pass
     _handle_sub2api_dead_account(item, client, is_disabled=False)
     return False
 
@@ -1028,8 +1132,9 @@ async def perform_cpa_check(args, async_stop_event, loop, executor=None):
     all_files = res.json().get("files", [])
     codex_files = [
         f for f in all_files
-        if "codex" in str(f.get("type", "")).lower()
-           or "codex" in str(f.get("provider", "")).lower()
+        if ("codex" in str(f.get("type", "")).lower() or "codex" in str(f.get("provider", "")).lower())
+           and (str(f.get("id_token", {}).get("plan_type", "")).lower() == "free"
+                or str(f.get("id_token", {}).get("planType", "")).lower() == "free")
     ]
     total_files = len(codex_files)
 
@@ -1059,19 +1164,26 @@ async def perform_sub2api_check(args, async_stop_event, loop, client, executor=N
         print(f"[{ts()}] [ERROR] 获取 Sub2API 全量库存失败: {account_list}")
         return 0, 0
 
-    total_files = len(account_list)
+    filtered_list = [
+        item for item in account_list
+        if item.get("platform") == "openai"
+           and str(item.get("credentials", {}).get("plan_type", "free")).lower() == "free"
+           and (item.get("extra") or {}).get("codex_5h_window_minutes", 0) == 0
+    ]
+
+    total_files = len(filtered_list)
 
     if executor is not None:
         futures = [
             loop.run_in_executor(executor, process_sub2api_worker, i, total_files, item, client, args)
-            for i, item in enumerate(account_list, 1)
+            for i, item in enumerate(filtered_list, 1)
         ]
         results = await asyncio.gather(*futures)
     else:
         with ThreadPoolExecutor(max_workers=cfg.SUB2API_THREADS) as _ex:
             futures = [
                 loop.run_in_executor(_ex, process_sub2api_worker, i, total_files, item, client, args)
-                for i, item in enumerate(account_list, 1)
+                for i, item in enumerate(filtered_list, 1)
             ]
             results = await asyncio.gather(*futures)
 
@@ -1140,8 +1252,9 @@ async def cpa_main_loop(args, async_stop_event: asyncio.Event, executor=None):
                 all_files = res.json().get("files", [])
                 codex_files = [
                     f for f in all_files
-                    if "codex" in str(f.get("type", "")).lower()
-                       or "codex" in str(f.get("provider", "")).lower()
+                    if ("codex" in str(f.get("type", "")).lower() or "codex" in str(f.get("provider", "")).lower())
+                       and (str(f.get("id_token", {}).get("plan_type", "")).lower() == "free"
+                            or str(f.get("id_token", {}).get("planType", "")).lower() == "free")
                 ]
                 total_files = len(codex_files)
                 valid_count = total_files
@@ -1281,19 +1394,26 @@ async def sub2api_main_loop(args, async_stop_event: asyncio.Event, executor=None
                     except asyncio.TimeoutError: pass
                     continue
 
-                total_files = len(account_list)
+                filtered_list = [
+                    item for item in account_list
+                    if item.get("platform") == "openai"
+                       and str(item.get("credentials", {}).get("plan_type", "free")).lower() == "free"
+                       and (item.get("extra") or {}).get("codex_5h_window_minutes", 0) == 0
+                ]
+
+                total_files = len(filtered_list)
 
                 if executor is not None:
                     futures = [
                         loop.run_in_executor(executor, process_sub2api_worker, i, total_files, item, client, args)
-                        for i, item in enumerate(account_list, 1)
+                        for i, item in enumerate(filtered_list, 1)
                     ]
                     results = await asyncio.gather(*futures)
                 else:
                     with ThreadPoolExecutor(max_workers=cfg.SUB2API_THREADS) as _ex:
                         futures = [
                             loop.run_in_executor(_ex, process_sub2api_worker, i, total_files, item, client, args)
-                            for i, item in enumerate(account_list, 1)
+                            for i, item in enumerate(filtered_list, 1)
                         ]
                         results = await asyncio.gather(*futures)
 
@@ -1309,7 +1429,14 @@ async def sub2api_main_loop(args, async_stop_event: asyncio.Event, executor=None
                     except asyncio.TimeoutError:
                         pass
                     continue
-                total_files = len(account_list)
+
+                filtered_list = [
+                    item for item in account_list
+                    if item.get("platform") == "openai"
+                       and str(item.get("credentials", {}).get("plan_type", "free")).lower() == "free"
+                       and (item.get("extra") or {}).get("codex_5h_window_minutes", 0) == 0
+                ]
+                total_files = len(filtered_list)
                 valid_count = total_files
                 print(f"[{ts()}] [INFO] 当前云端总数: {total_files} (未开启自动巡检，默认全部视为有效)")
 
@@ -1514,8 +1641,10 @@ class RegEngine:
         self._force_stopped = False
         cfg.GLOBAL_STOP = False
         cfg.POOL_EXHAUSTED = False
-        self.thread_stop_event.clear()
-        args.check_stop = lambda: self.thread_stop_event.is_set()
+        self.thread_stop_event = threading.Event()
+
+        current_evt = self.thread_stop_event
+        args.check_stop = lambda: current_evt.is_set()
         self._ensure_executor()
         self.current_thread = threading.Thread(
             target=self._run_normal_in_thread,
@@ -1530,20 +1659,22 @@ class RegEngine:
         self._force_stopped = False
         cfg.GLOBAL_STOP = False
         cfg.POOL_EXHAUSTED = False
-        self.thread_stop_event.clear()
+        self.thread_stop_event = threading.Event()
+
         self._ensure_executor()
         self.current_thread = threading.Thread(
             target=self._run_cpa_in_thread, args=(args,), daemon=True
         )
         self.current_thread.start()
-        
+
     def start_sub2api(self, args):
         if self.is_running():
             return
         self._force_stopped = False
         cfg.GLOBAL_STOP = False
         cfg.POOL_EXHAUSTED = False
-        self.thread_stop_event.clear()
+        self.thread_stop_event = threading.Event()
+
         self._ensure_executor()
         self.current_thread = threading.Thread(
             target=self._run_sub2api_in_thread, args=(args,), daemon=True
@@ -1551,6 +1682,7 @@ class RegEngine:
         self.current_thread.start()
 
     def _run_cpa_in_thread(self, args):
+        self._perform_initial_cleanup()
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         try:
@@ -1559,6 +1691,7 @@ class RegEngine:
             self._finalize_thread_run()
 
     def _run_normal_in_thread(self, args):
+        self._perform_initial_cleanup()
         try:
             normal_main_loop(args, self.thread_stop_event, executor=self._executor)
         except Exception as e:
@@ -1569,6 +1702,7 @@ class RegEngine:
             self._finalize_thread_run()
 
     def _run_sub2api_in_thread(self, args):
+        self._perform_initial_cleanup()
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         try:
@@ -1576,7 +1710,7 @@ class RegEngine:
             self.loop.run_until_complete(sub2api_main_loop(args, self.async_stop_event, executor=self._executor))
         finally:
             self._finalize_thread_run()
-            
+
     async def _cpa_wrapper(self, args):
         self.async_stop_event = asyncio.Event()
         await cpa_main_loop(args, self.async_stop_event, executor=self._executor)
@@ -1607,7 +1741,7 @@ class RegEngine:
         self._force_stopped = False
         cfg.GLOBAL_STOP = False
         cfg.POOL_EXHAUSTED = False
-        self.thread_stop_event.clear()
+        self.thread_stop_event = threading.Event()
         self._ensure_executor()
         self.current_thread = threading.Thread(
             target=self._run_check_in_thread, args=(args,), daemon=True
@@ -1623,6 +1757,45 @@ class RegEngine:
         finally:
             self._finalize_thread_run()
             self._force_stopped = True
+
+    def _perform_initial_cleanup(self):
+        if not getattr(cfg, 'TEAM_MODE_ENABLE', False):
+            return
+
+        print(f"[{cfg.ts()}] [系统] 🚀 正在执行开局环境初始化，请不要着急耐心等待...")
+        from utils.auth_core import sys_node_bulk_silent
+
+        raw_proxy_item = None
+        clash_proxy_item = None
+        borrowed_generation = None
+        proxy_url = getattr(cfg, 'DEFAULT_PROXY', None)
+        try:
+            if cfg.is_raw_proxy_pool_enabled() and not cfg.PROXY_QUEUE.empty():
+                raw_proxy_item = cfg.PROXY_QUEUE.get_nowait()
+                borrowed_generation, p_url = cfg.unpack_proxy_queue_item(raw_proxy_item)
+                proxy_url = p_url
+            elif getattr(cfg, '_clash_enable', False) and getattr(cfg, '_clash_pool_mode',
+                                                                  False) and not cfg.PROXY_QUEUE.empty():
+                clash_proxy_item = cfg.PROXY_QUEUE.get_nowait()
+                proxy_url = clash_proxy_item[-1] if isinstance(clash_proxy_item, tuple) else clash_proxy_item
+
+            if proxy_url and not proxy_url.startswith(("http://", "https://", "socks4://", "socks5://")):
+                proxy_url = f"http://{proxy_url}"
+
+            proxies_dict = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+            sys_node_bulk_silent(proxies=proxies_dict, force_all=True)
+            print(f"[{cfg.ts()}] [系统] ✨ 开局清理完毕。")
+        except Exception as e:
+            print(f"[{cfg.ts()}] [ERROR] 开局清理异常: {e}")
+        finally:
+            if raw_proxy_item is not None:
+                if cfg.should_return_pooled_proxy(borrowed_generation):
+                    cfg.PROXY_QUEUE.put(cfg.make_proxy_queue_item(proxy_url, borrowed_generation))
+                cfg.PROXY_QUEUE.task_done()
+            elif clash_proxy_item is not None:
+                cfg.PROXY_QUEUE.put(clash_proxy_item)
+                cfg.PROXY_QUEUE.task_done()
+
 
 if __name__ == "__main__":
     main()

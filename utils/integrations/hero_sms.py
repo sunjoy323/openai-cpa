@@ -6,6 +6,11 @@ from typing import Any, Dict, List, Optional
 from curl_cffi import requests
 from utils import db_manager
 from utils import config as cfg
+try:
+    from utils.auth_core import generate_payload
+except Exception:
+    def generate_payload(*_args, **_kwargs):
+        return ""
 
 class UserStoppedError(Exception): pass
 def _ssl_verify() -> bool: return True
@@ -26,13 +31,6 @@ def _sleep_interruptible(sec: float) -> bool:
             return True
         time.sleep(0.1)
     return False
-
-def _build_sentinel_for_session(session, flow: str, proxies: Any) -> str:
-    try:
-        from utils.sentinel import get_token
-        return get_token(session, flow, proxies) or ""
-    except Exception:
-        return ""
 
 def _post_with_retry(session, url: str, headers: dict = None, json_body: dict = None, proxies: Any = None,
                      timeout: int = 30, retries: int = 1):
@@ -724,49 +722,10 @@ def hero_sms_get_balance(proxies: Any = None) -> tuple[float, str]:
     return -1.0, line or "无法解析余额"
 
 def _hero_sms_resolve_service_code(proxies: Any) -> str:
-    global _HERO_SMS_SERVICE_CACHE
+    raw = str(getattr(cfg, 'HERO_SMS_SERVICE', 'dr')).strip()
+    selected = raw if raw else "dr"
 
-    raw = str(cfg.HERO_SMS_SERVICE).strip()
-    if raw and raw.lower() not in {"auto", "openai", "chatgpt", "gpt", "codex"}:
-        return raw
-    if _HERO_SMS_SERVICE_CACHE:
-        return _HERO_SMS_SERVICE_CACHE
-
-    ok, _, data = _hero_sms_request(
-        "getServicesList",
-        proxies=proxies,
-        params={"lang": "en"},
-        timeout=30,
-    )
-    services: List[Dict[str, Any]] = []
-    if ok and isinstance(data, dict):
-        if isinstance(data.get("services"), list):
-            services = [x for x in data.get("services") if isinstance(x, dict)]
-        elif isinstance(data.get("data"), list):
-            services = [x for x in data.get("data") if isinstance(x, dict)]
-
-    selected = ""
-    for item in services:
-        code = str(item.get("code") or item.get("id") or "").strip()
-        name = str(item.get("name") or item.get("title") or item.get("eng") or "").strip()
-        low = f"{code} {name}".lower()
-        if "openai" in low:
-            selected = code
-            break
-    if not selected:
-        for item in services:
-            code = str(item.get("code") or item.get("id") or "").strip()
-            name = str(item.get("name") or item.get("title") or item.get("eng") or "").strip()
-            low = f"{code} {name}".lower()
-            if any(k in low for k in ("chatgpt", "codex", "gpt")):
-                selected = code
-                break
-
-    if not selected:
-        selected = "dr"
-
-    _HERO_SMS_SERVICE_CACHE = selected
-    _info(f"HeroSMS 服务代码: {selected}")
+    _info(f"HeroSMS 使用手动填写的服务代码: {selected}")
     return selected
 
 
@@ -1063,6 +1022,10 @@ def _try_verify_phone_via_hero_sms(
         *,
         proxies: Any,
         hint_url: str = "",
+        device_id: str = "",
+        user_agent: str = "",
+        run_ctx: dict = None,
+        proxy: Optional[str] = None,
 ) -> tuple[bool, str]:
     if not _hero_sms_enabled():
         return False, "HeroSMS 未配置 API Key 或HeroSMS主开关未开启，如果不想花钱接码请忽略该条提示"
@@ -1102,7 +1065,16 @@ def _try_verify_phone_via_hero_sms(
                 "accept": "application/json",
                 "content-type": "application/json",
             }
-            send_sentinel = _build_sentinel_for_session(session, "authorize_continue", proxies)
+
+            send_sentinel = generate_payload(
+                did=device_id,
+                flow="authorize_continue",
+                proxy=proxy,
+                user_agent=user_agent,
+                impersonate="chrome110",
+                ctx=run_ctx
+            )
+
             if send_sentinel:
                 send_headers["openai-sentinel-token"] = send_sentinel
 
@@ -1149,7 +1121,15 @@ def _try_verify_phone_via_hero_sms(
                 "accept": "application/json",
                 "content-type": "application/json",
             }
-            verify_sentinel = _build_sentinel_for_session(session, "authorize_continue", proxies)
+            verify_sentinel = generate_payload(
+                did=device_id,
+                flow="authorize_continue",
+                proxy=proxy,
+                user_agent=user_agent,
+                impersonate="chrome110",
+                ctx=run_ctx
+            )
+
             if verify_sentinel:
                 verify_headers["openai-sentinel-token"] = verify_sentinel
 

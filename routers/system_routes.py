@@ -7,6 +7,11 @@ import threading
 import sys
 import subprocess
 import httpx
+import requests
+import zipfile
+import io
+import shutil
+
 from typing import Optional, Any
 from fastapi import APIRouter, Depends, Query, Request, WebSocket, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -14,8 +19,10 @@ from pydantic import BaseModel
 
 from global_state import VALID_TOKENS, CLUSTER_NODES, NODE_COMMANDS, cluster_lock, log_history, engine, verify_token, worker_status, append_log
 from utils import core_engine, db_manager
+from utils.email_providers import mail_service
 from utils.config import reload_all_configs
 from utils.integrations.tg_notifier import send_tg_msg_async
+from utils.memory_predictor import build_memory_report
 import utils.config as cfg
 
 router = APIRouter()
@@ -27,6 +34,7 @@ class DummyArgs:
         self.once = once
 
 class LoginData(BaseModel): password: str
+class DomainRuntimeActionReq(BaseModel): domain: str
 class ClusterUploadAccountsReq(BaseModel): node_name: str; secret: str; accounts: list
 class ClusterReportReq(BaseModel): node_name: str; secret: str; stats: dict; logs: list
 class ClusterControlReq(BaseModel): node_name: str; action: str
@@ -121,6 +129,7 @@ async def start_task(token: str = Depends(verify_token)):
     default_proxy = getattr(core_engine.cfg, 'DEFAULT_PROXY', None)
     args = DummyArgs(proxy=default_proxy if default_proxy else None)
     core_engine.run_stats.update({"success": 0, "failed": 0, "retries": 0, "pwd_blocked": 0, "phone_verify": 0, "start_time": time.time(),"target": 0})
+    mail_service.start_mail_domain_runtime_tracking()
     if getattr(core_engine.cfg, 'ENABLE_CPA_MODE', False):
         engine.start_cpa(args)
         return {"status": "success", "message": "启动成功：已自动识别并开启 [CPA 智能仓管模式]"}
@@ -155,6 +164,7 @@ async def stop_task(token: str = Depends(verify_token)):
 
     asyncio.create_task(send_tg_msg_async(msg))
     engine.stop()
+    mail_service.stop_mail_domain_runtime_tracking()
     return {"status": "success", "message": "已发送停止指令，正在安全退出..."}
 
 
@@ -190,13 +200,32 @@ async def get_stats(token: str = Depends(verify_token)):
         current_mode = "CPA 仓管" if getattr(core_engine.cfg, 'ENABLE_CPA_MODE', False) else (
             "Sub2Api 仓管" if getattr(core_engine.cfg, 'ENABLE_SUB2API_MODE', False) else "常规量产")
 
+    domain_summary = mail_service.get_mail_domain_runtime_summary()
+    memory_report = build_memory_report(getattr(core_engine.cfg, '_c', {}))
+    actual_memory = memory_report.get("actual", {})
+    predicted_memory = memory_report.get("prediction", {}).get("predicted_mb", {})
+
     return {
         "success": stats["success"], "failed": stats["failed"], "retries": stats["retries"],
         "pwd_blocked": stats.get("pwd_blocked", 0), "phone_verify": stats.get("phone_verify", 0),
         "total": total_attempts, "target": stats["target"] if stats["target"] > 0 else "∞",
         "success_rate": f"{success_rate}%", "elapsed": f"{elapsed}s", "avg_time": f"{avg_time}s",
-        "progress_pct": f"{progress_pct}%", "is_running": is_running, "mode": current_mode
+        "progress_pct": f"{progress_pct}%", "is_running": is_running, "mode": current_mode,
+        "available_count": domain_summary.get("available_count", 0),
+        "cooldown_count": domain_summary.get("cooldown_count", 0),
+        "memory": {
+            "rss_mb": actual_memory.get("rss_mb"),
+            "predicted_mid_mb": predicted_memory.get("mid"),
+            "predicted_high_mb": predicted_memory.get("high"),
+            "safety_level": memory_report.get("safety", {}).get("level"),
+            "safety_label": memory_report.get("safety", {}).get("label"),
+        },
     }
+
+
+@router.get("/api/system/memory_prediction")
+async def get_memory_prediction(token: str = Depends(verify_token)):
+    return build_memory_report(getattr(core_engine.cfg, '_c', {}))
 
 
 @router.post("/api/start_check")
@@ -241,13 +270,50 @@ async def get_config(token: str = Depends(verify_token)):
     return config_data
 
 
+@router.get("/api/config/mail_domain_runtime_stats")
+async def get_mail_domain_runtime_stats(token: str = Depends(verify_token)):
+    return {"status": "success", "items": mail_service.get_mail_domain_runtime_stats()}
+
+
+@router.post("/api/config/mail_domain_runtime_stats/clear")
+async def clear_mail_domain_runtime_stats(token: str = Depends(verify_token)):
+    cleared_count = mail_service.clear_all_mail_domain_runtime_cooldowns()
+    return {"status": "success", "message": f"已清除 {cleared_count} 个域名冷却"}
+
+
+@router.post("/api/config/mail_domain_runtime_stats/clear_counters")
+async def clear_mail_domain_runtime_domain_counters(req: DomainRuntimeActionReq, token: str = Depends(verify_token)):
+    item = mail_service.clear_mail_domain_runtime_domain_counters(req.domain)
+    if not item:
+        return {"status": "error", "message": "未找到指定域名的运行时计数"}
+    return {"status": "success", "message": f"已清空 {item['domain']} 的计数", "item": item}
+
+
+@router.post("/api/config/mail_domain_runtime_stats/clear_cooldown")
+async def clear_mail_domain_runtime_domain_cooldown(req: DomainRuntimeActionReq, token: str = Depends(verify_token)):
+    item = mail_service.clear_mail_domain_runtime_domain_cooldown(req.domain)
+    if not item:
+        return {"status": "error", "message": "未找到指定域名的冷却状态"}
+    return {"status": "success", "message": f"已清除 {item['domain']} 的冷却", "item": item}
+
+
 @router.post("/api/config")
 async def save_config(new_config: dict, token: str = Depends(verify_token)):
     try:
         if isinstance(new_config.get("sub2api_mode"), dict):
             new_config["sub2api_mode"].pop("min_remaining_weekly_percent", None)
         new_config["local_microsoft"] = _sanitize_local_microsoft_config(new_config.get("local_microsoft"))
+        if not isinstance(new_config.get("disabled_mail_domains"), list):
+            new_config["disabled_mail_domains"] = []
+        if not isinstance(new_config.get("mail_domain_failure_types"), list):
+            new_config["mail_domain_failure_types"] = ["discarded_email"]
+        new_config["mail_domain_failure_types"] = list(dict.fromkeys(
+            str(item or "").strip().lower()
+            for item in new_config.get("mail_domain_failure_types", [])
+            if str(item or "").strip()
+        )) or ["discarded_email"]
         reload_all_configs(new_config_dict=new_config)
+        mail_service.sync_mail_domain_runtime_state_with_config()
 
         return {"status": "success", "message": "✅ 配置已成功保存并同步至云端！"}
     except Exception as e:
@@ -257,23 +323,36 @@ async def save_config(new_config: dict, token: str = Depends(verify_token)):
 @router.get("/api/system/check_update")
 async def check_update(current_version: str, token: str = Depends(verify_token)):
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get("https://api.github.com/repos/wenfxl/openai-cpa/releases/latest",
-                                    headers={"Accept": "application/vnd.github.v3+json"})
-            if resp.status_code != 200: return {"status": "error",
-                                                "message": f"无法获取更新数据 (GitHub API 返回 HTTP {resp.status_code})"}
-        data = resp.json()
-        remote_version = data.get("tag_name", "")
+        proxy_url = getattr(core_engine.cfg, 'DEFAULT_PROXY', None)
 
+        web_url = "https://github.com/wenfxl/openai-cpa/releases/latest"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        async with httpx.AsyncClient(proxy=proxy_url, timeout=15.0) as client:
+            resp = await client.head(web_url, headers=headers, follow_redirects=False)
+
+            if resp.status_code == 302:
+                redirect_url = resp.headers.get("Location")
+                if not redirect_url:
+                    return {"status": "error", "message": "无法从 GitHub 获取重定向地址"}
+                remote_version = redirect_url.split("/")[-1]
+                html_url = redirect_url
+                download_url = f"https://github.com/wenfxl/openai-cpa/archive/refs/tags/{remote_version}.zip"
+            else:
+                return {"status": "error", "message": f"获取版本失败，状态码: {resp.status_code}"}
         def _parse(v):
             return [int(x) for x in re.findall(r'\d+', str(v))]
 
         has_update = _parse(remote_version) > _parse(current_version) if remote_version else False
-        assets = data.get("assets")
-        download_url = assets[0].get("browser_download_url", "") if assets else data.get("zipball_url", "")
-        return {"status": "success", "has_update": has_update, "remote_version": remote_version,
-                "changelog": data.get("body", "无更新日志"), "download_url": download_url,
-                "html_url": data.get("html_url", "")}
+        changelog = "暂不展示详细日志。请自行前往仓库查看。"
+
+        return {
+            "status": "success",
+            "has_update": has_update,
+            "remote_version": remote_version,
+            "changelog": changelog,
+            "download_url": download_url,
+            "html_url": html_url
+        }
     except Exception as e:
         return {"status": "error", "message": f"检查更新发生未知异常: {str(e)}"}
 
@@ -552,10 +631,123 @@ def ext_reset_stats(token: str = Depends(verify_token)):
         "target": getattr(core_engine.cfg, 'NORMAL_TARGET_COUNT', 0),
         "ext_is_running": True
     })
+    mail_service.start_mail_domain_runtime_tracking()
     return {"status": "success"}
 
 @router.post("/api/ext/stop")
 def ext_stop(token: str = Depends(verify_token)):
     from utils import core_engine
     core_engine.run_stats["ext_is_running"] = False
+    mail_service.stop_mail_domain_runtime_tracking()
     return {"status": "success"}
+
+@router.get("/api/system/version")
+def get_system_version():
+    return {"status": "success", "version": cfg.APP_VERSION}
+
+
+def is_docker():
+    path = '/proc/self/cgroup'
+    return (
+            os.path.exists('/.dockerenv') or
+            os.path.exists('/run/.containerenv') or
+            (os.path.isfile(path) and any('docker' in line for line in open(path)))
+    )
+
+@router.post("/api/system/auto_update")
+def auto_update(token: str = Depends(verify_token)):
+    if is_docker():
+        return execute_docker_update()
+    else:
+        return execute_native_update()
+
+
+def execute_docker_update():
+    try:
+        project_path = os.getenv("HOST_PROJECT_PATH")
+        image_name = "wenfxl/wenfxl-codex-manager:latest"
+        print(f"[{core_engine.ts()}] [系统] 🚀 正在通过官方 Compose 引擎执行重建...")
+        subprocess.run(["docker", "pull", image_name], check=False)
+        update_cmd = (
+            f"nohup docker run --rm "
+            f"-v /var/run/docker.sock:/var/run/docker.sock "
+            f"-v {project_path}:{project_path} "
+            f"-w {project_path} "
+            f"docker/compose:latest up -d --no-deps codex-web > /dev/null 2>&1 &"
+        )
+
+        print(f"[{core_engine.ts()}] [系统] 🔄 指令已发出，由官方引擎接管重建任务...")
+        subprocess.Popen(update_cmd, shell=True)
+
+        return {
+            "status": "success",
+            "message": "更新指令已由官方引擎接管！系统正在自我重建，请 20 秒后刷新网页..."
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": f"更新异常: {str(e)}"}
+
+def execute_native_update():
+    try:
+        proxy_url = getattr(core_engine.cfg, 'DEFAULT_PROXY', None)
+        proxies = None
+        if proxy_url:
+            proxies = {
+                "http": proxy_url,
+                "https": proxy_url
+            }
+            print(f"[{core_engine.ts()}] [系统] 🚀 正在使用全局代理穿透下载更新: {proxy_url}")
+        else:
+            print(f"[{core_engine.ts()}] [系统] ⚠️ 未检测到全局代理，尝试直连下载...")
+
+        web_url = "https://github.com/wenfxl/openai-cpa/releases/latest"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        release_response = requests.head(web_url, headers=headers, proxies=proxies, allow_redirects=False, timeout=15)
+
+        if release_response.status_code == 302:
+            redirect_url = release_response.headers.get('Location')
+            if not redirect_url:
+                raise Exception("无法从 GitHub 获取重定向地址")
+            latest_tag = redirect_url.split('/')[-1]
+            print(f"[{core_engine.ts()}] [系统] 🎉 成功获取最新版本标签: {latest_tag}")
+
+            zip_url = f"https://github.com/wenfxl/openai-cpa/archive/refs/tags/{latest_tag}.zip"
+        else:
+            raise Exception(f"请求被拒绝或状态异常，状态码: {release_response.status_code}")
+
+        print(f"[{core_engine.ts()}] [系统] 🚀 开始下载新版本源码包: {zip_url}")
+
+        response = requests.get(zip_url, headers=headers, stream=True, proxies=proxies, timeout=60)
+        response.raise_for_status()
+
+        with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
+            root_dir = zip_ref.namelist()[0]
+            for member in zip_ref.namelist():
+                if member == root_dir:
+                    continue
+                target_path = os.path.join(os.getcwd(), member.replace(root_dir, "", 1))
+                if member.endswith('/'):
+                    os.makedirs(target_path, exist_ok=True)
+                else:
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                    with zip_ref.open(member) as source, open(target_path, "wb") as target:
+                        shutil.copyfileobj(source, target)
+
+        def restart_server():
+            time.sleep(2)
+            print(f"[{core_engine.ts()}] [系统] 🔄 代码覆盖完毕，正在执行热重启...")
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+                subprocess.Popen([sys.executable] + sys.argv)
+                os._exit(0)
+            except Exception as e:
+                print(f"[{core_engine.ts()}] [系统] ❌ 重启失败: {e}")
+                os._exit(1)
+
+        threading.Thread(target=restart_server).start()
+
+        return {"status": "success", "message": "本地代码更新完成，系统正在热重启..."}
+
+    except Exception as e:
+        return {"status": "error", "message": f"本地更新异常: {str(e)}"}

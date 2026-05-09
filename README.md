@@ -1,6 +1,14 @@
 ﻿# Wenfxl Codex Manager Web Console
-[![Telegram Group](https://img.shields.io/badge/Telegram-Community_Chat-0088cc?style=for-the-badge&logo=telegram)](https://t.me/+4AmjbVPvvRgxMDVl)
+[![Telegram Group](https://img.shields.io/badge/Telegram-Community_Chat-0088cc?style=for-the-badge&logo=telegram)](https://t.me/+srBiKuPvn4A3YmNl)
 [![License](https://img.shields.io/badge/License-CC_BY--NC_4.0-lightgrey?style=for-the-badge)](https://creativecommons.org/licenses/by-nc/4.0/legalcode)
+
+> ⚠️ **CRITICAL UPDATE (April 29, 2026) 20:29**
+> 
+> The official Telegram community has been fully migrated! The original group is no longer active.
+> 
+> **ATTENTION:** The authentication system of Wenfxl Codex Manager is strictly bound to our official group. All users MUST **join the new group immediately**. Failure to do so will result in an HTTP 403 error and automatic service suspension during the next silent authorization check.
+> 
+> 👉 **[Click Here to Join the NEW Official Group](https://t.me/+srBiKuPvn4A3YmNl)**
 
 An advanced Distributed Automation Platform for high-concurrency account registration and full-lifecycle inventory management. It serves as a centralized Web Orchestration Hub that seamlessly synchronizes distributed browser extension workers (Classic Mode), multi-backend mailbox engines, and enterprise-grade cloud warehouses (CPA/Sub2API) into a unified master-worker ecosystem.
 
@@ -237,13 +245,21 @@ services:
     volumes:
       - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker
+      - .:${PWD}
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.scope=openai-cpa"
+
   watchtower:
-    image: containrrr/watchtower
+    image: nickfedor/watchtower:latest
     container_name: watchtower
     restart: always
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 86400 --cleanup
+    command: --label-enable --scope openai-cpa --interval 86400 --cleanup
+
+
 
 ```
 
@@ -261,13 +277,21 @@ services:
     ports:
       - "8000:8000"
     restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker
+      - .:${PWD}
     environment:
+      - HOST_PROJECT_PATH=${PWD}
       - TZ=Asia/Shanghai
       - DB_TYPE=mysql
-      - DB_HOST=MySQL IP
+      - DB_HOST=你的云端MySQL地址
       - DB_PORT=3306
       - DB_USER=root
-      - DB_PASS=password
+      - DB_PASS=你的数据库密码
       - DB_NAME=wenfxl_manager
 ```
 
