@@ -34,13 +34,30 @@ from utils import config as cfg
 from utils import db_manager
 from utils.config import reload_all_configs, ts, format_docker_url
 from utils.email_providers.mail_service import mask_email
-try:
-    from utils.auth_pipeline.register import run
-    from utils.auth_pipeline.oauth import refresh_oauth_token as _refresh_oauth_token
-    _AUTH_PIPELINE_IMPORT_ERROR = None
-except Exception as exc:
-    _AUTH_PIPELINE_IMPORT_ERROR = exc
-    from utils.register import run, refresh_oauth_token as _refresh_oauth_token
+_AUTH_PIPELINE_IMPORT_ERROR = None
+
+
+def _load_register_backend():
+    """根据配置选择注册后端，默认使用本地 legacy 流程避开上游授权锁。"""
+    global _AUTH_PIPELINE_IMPORT_ERROR
+    backend = str(getattr(cfg, "REGISTER_BACKEND", "legacy") or "legacy").strip().lower()
+    if backend == "auth_pipeline":
+        try:
+            from utils.auth_pipeline.register import run as pipeline_run
+            from utils.auth_pipeline.oauth import refresh_oauth_token as pipeline_refresh
+            _AUTH_PIPELINE_IMPORT_ERROR = None
+            return "auth_pipeline", pipeline_run, pipeline_refresh
+        except Exception as exc:
+            _AUTH_PIPELINE_IMPORT_ERROR = exc
+            print(f"[{ts()}] [WARNING] 上游 auth_pipeline 不可用，已回落到本地 legacy 注册流程: {exc}")
+
+    from utils.register import run as legacy_run, refresh_oauth_token as legacy_refresh
+    return "legacy", legacy_run, legacy_refresh
+
+
+def run(proxy, run_ctx=None):
+    _, run_func, _ = _load_register_backend()
+    return run_func(proxy, run_ctx=run_ctx)
 
 from utils.proxy_manager import smart_switch_node
 from utils.integrations.sub2api_client import Sub2APIClient
@@ -344,7 +361,8 @@ def _extract_cliproxy_failure_reason(
 
 def refresh_oauth_token(refresh_token: str, proxies: Any = None) -> Tuple[bool, dict]:
     """刷新获取新的 access_token 等凭证"""
-    return _refresh_oauth_token(refresh_token, proxies=proxies)
+    _, _, refresh_func = _load_register_backend()
+    return refresh_func(refresh_token, proxies=proxies)
 
 
 def test_cliproxy_auth_file(item: dict, api_url: str, api_token: str) -> Tuple[bool, str]:

@@ -5,6 +5,10 @@
 # https://github.com/s12ryt/mail-curl
 
 reg_mode: "protocol"
+# 注册后端:
+# legacy = 本地旧版注册流程，不需要 wenfxl.license
+# auth_pipeline = 上游新版注册流水线，需要 wenfxl.license 授权凭证
+register_backend: "legacy"
 # 可选值: "imap" / "freemail" / "cloudflare_temp_email" / "cloudmail" / "mail_curl" / "luckmail"
 email_api_mode: "cloudflare_temp_email"
 

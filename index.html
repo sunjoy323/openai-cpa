@@ -183,6 +183,18 @@
 <!--                                            古法-->
 <!--                                        </button>-->
                                     </div>
+                                    <div class="bg-slate-100 p-1 rounded-xl flex w-full sm:w-72 shadow-inner border border-slate-200 shrink-0">
+                                        <button @click="changeRegisterBackend('legacy')"
+                                                :class="['flex-1 py-1.5 md:py-2 px-2 md:px-3 rounded-lg text-xs md:text-sm font-bold transition-all whitespace-nowrap',
+                                                         config.register_backend !== 'auth_pipeline' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700']">
+                                            本地流程
+                                        </button>
+                                        <button @click="changeRegisterBackend('auth_pipeline')"
+                                                :class="['flex-1 py-1.5 md:py-2 px-2 md:px-3 rounded-lg text-xs md:text-sm font-bold transition-all whitespace-nowrap',
+                                                         config.register_backend === 'auth_pipeline' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500 hover:text-slate-700']">
+                                            授权流水线
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
 

@@ -1022,6 +1022,9 @@ createApp({
                 if (!this.config.reg_mode) {
                         this.config.reg_mode = 'protocol';
                     }
+                if (!this.config.register_backend) {
+                    this.config.register_backend = 'legacy';
+                }
                 if (!this.config.tg_bot.template_success) {
                     this.config.tg_bot.template_success = "🎉 <b>注册成功</b>\n⏰ 时间: <code>{time}</code>\n📧 账号: <code>{email}</code>\n🔑 密码: <code>{password}</code>";
                 }
@@ -1261,6 +1264,7 @@ createApp({
                     this.mailDomainRuntimeStatsError = '';
                     this.mailDomainRuntimeLastFetchAt = 0;
                 }
+                this.config.register_backend = this.config.register_backend === 'auth_pipeline' ? 'auth_pipeline' : 'legacy';
                 if (!Array.isArray(this.config.disabled_mail_domains)) {
                     this.config.disabled_mail_domains = [];
                 }
@@ -3055,6 +3059,13 @@ createApp({
                 window.postMessage({ type: "CMD_STOP_WORKER" }, "*");
                 console.log("🛑 [总控] 已进入协议模式，切断插件链路。");
             }
+        },
+        async changeRegisterBackend(backend) {
+            if (!this.config) return;
+            this.config.register_backend = backend === 'auth_pipeline' ? 'auth_pipeline' : 'legacy';
+            await this.saveConfig();
+            const label = this.config.register_backend === 'auth_pipeline' ? '上游授权流水线' : '本地旧版流程';
+            this.showToast(`注册后端已切换为: ${label}`, 'info');
         },
         async fetchMailboxes(isManual = false) {
             if (isManual) this.mailboxPage = 1;

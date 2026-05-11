@@ -181,6 +181,7 @@ def init_config():
 APP_VERSION = "v14.3.4"
 _c: dict = {}
 WEB_PASSWORD: str = "admin"
+REGISTER_BACKEND: str = "legacy"
 RETAIN_REG_ONLY: bool = False
 ENABLE_SUB_DOMAINS: bool = False
 SUB_DOMAIN_COUNT: int = 10
@@ -467,6 +468,8 @@ def reload_all_configs(new_config_dict=None):
     global HERO_SMS_REUSE_PHONE, HERO_SMS_REUSE_MAX
     global FIVESIM_REUSE_PHONE, FIVESIM_REUSE_MAX
     global OPENAI_CPA_WEBHOOK_SECRET
+    global REGISTER_BACKEND
+
     global TEAM_MODE_ENABLE
     base_yaml_config = init_config()
 
@@ -518,6 +521,12 @@ def reload_all_configs(new_config_dict=None):
                 set_sys_kv("global_app_config", _c)
         else:
             _c = base_yaml_config
+
+    register_backend = str(_c.get("register_backend", "legacy") or "legacy").strip().lower()
+    if register_backend in {"auth", "pipeline", "upstream", "auth_pipeline"}:
+        REGISTER_BACKEND = "auth_pipeline"
+    else:
+        REGISTER_BACKEND = "legacy"
 
     def safe_int(value, default, minimum=None):
         try:
