@@ -14,6 +14,8 @@ import utils.config as cfg
 from utils.integrations.sub2api_client import Sub2APIClient, build_sub2api_export_bundle, get_sub2api_push_settings
 from utils.integrations.image2api_client import Image2APIClient
 try:
+    if str(getattr(cfg, "REGISTER_BACKEND", "legacy") or "legacy").strip().lower() != "auth_pipeline":
+        raise ImportError("auth_core disabled while register_backend=legacy")
     from utils.auth_core import email_jwt
 except Exception:
     def email_jwt(_token):

@@ -30,10 +30,25 @@ try:
 except Exception:
     _try_verify_phone_via_hero_sms = None
 
-try:
-    from utils.auth_core import generate_payload as _authcore_generate_payload
-except Exception:
-    _authcore_generate_payload = None
+_authcore_generate_payload = None
+_authcore_import_checked = False
+
+
+def _load_authcore_generate_payload():
+    """仅在显式启用上游授权流水线时加载 auth_core，避免 legacy 流程触发授权锁。"""
+    global _authcore_generate_payload, _authcore_import_checked
+    if str(getattr(cfg, "REGISTER_BACKEND", "legacy") or "legacy").strip().lower() != "auth_pipeline":
+        return None
+    if _authcore_import_checked:
+        return _authcore_generate_payload
+    _authcore_import_checked = True
+    try:
+        from utils.auth_core import generate_payload
+        _authcore_generate_payload = generate_payload
+    except Exception as exc:
+        _authcore_generate_payload = None
+        print(f"[{cfg.ts()}] [WARNING] auth_core 不可用，将使用内置 sentinel 请求: {exc}")
+    return _authcore_generate_payload
 
 AUTH_URL            = "https://auth.openai.com/oauth/authorize"
 TOKEN_URL           = "https://auth.openai.com/oauth/token"
@@ -461,7 +476,8 @@ def _challenge_token(
     ctx: Optional[dict] = None,
 ) -> str:
     did = session.cookies.get("oai-did") or ""
-    if _authcore_generate_payload is not None and did:
+    authcore_generate_payload = _load_authcore_generate_payload()
+    if authcore_generate_payload is not None and did:
         try:
             proxy_url = ""
             if isinstance(proxies, dict):
@@ -478,10 +494,10 @@ def _challenge_token(
             if ctx is not None:
                 payload_kwargs["ctx"] = ctx
             try:
-                token = _authcore_generate_payload(**payload_kwargs)
+                token = authcore_generate_payload(**payload_kwargs)
             except TypeError:
                 payload_kwargs.pop("ctx", None)
-                token = _authcore_generate_payload(**payload_kwargs)
+                token = authcore_generate_payload(**payload_kwargs)
             token = str(token or "").strip()
             if token:
                 return token

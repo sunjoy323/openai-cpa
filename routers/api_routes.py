@@ -3,7 +3,11 @@ from . import system_routes
 from . import account_routes
 from . import service_routes
 from . import sms_routes
+import utils.config as cfg
+
 try:
+    if str(getattr(cfg, "REGISTER_BACKEND", "legacy") or "legacy").strip().lower() != "auth_pipeline":
+        raise ImportError("auth_core disabled while register_backend=legacy")
     from utils.auth_core import router as email_router
     from utils.auth_core import code_pool, cache_lock, generate_payload
 except Exception:

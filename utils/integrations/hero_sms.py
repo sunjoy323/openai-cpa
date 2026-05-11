@@ -7,6 +7,8 @@ from curl_cffi import requests
 from utils import db_manager
 from utils import config as cfg
 try:
+    if str(getattr(cfg, "REGISTER_BACKEND", "legacy") or "legacy").strip().lower() != "auth_pipeline":
+        raise ImportError("auth_core disabled while register_backend=legacy")
     from utils.auth_core import generate_payload
 except Exception:
     def generate_payload(*_args, **_kwargs):

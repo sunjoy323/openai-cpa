@@ -65,6 +65,19 @@ _orig_sleep = time.sleep
 LOCAL_USED_PIDS = set()
 AI_NAME_POOL = []
 AI_KW_POOL = []
+
+
+def _get_authcore_code_pool():
+    if str(getattr(cfg, "REGISTER_BACKEND", "legacy") or "legacy").strip().lower() != "auth_pipeline":
+        return None
+    try:
+        from utils.auth_core import code_pool
+        return code_pool
+    except ImportError:
+        print(f"[{cfg.ts()}] [ERROR] 无法导入内存池！")
+        return None
+
+
 FIRST_NAMES = [
     "james", "john", "robert", "michael", "william", "david", "richard", "joseph", "thomas", "charles",
     "christopher", "daniel", "matthew", "anthony", "mark", "donald", "steven", "paul", "andrew", "joshua"
@@ -1675,8 +1688,8 @@ def get_oai_code(
 
             elif mode == "cloudmail":
                 if getattr(cfg, 'CM_LOCAL_WEBHOOK', False):
-                    try:
-                        from utils.auth_core import code_pool
+                    code_pool = _get_authcore_code_pool()
+                    if code_pool is not None:
                         target_email = email.lower().strip()
                         if target_email in code_pool:
                             raw_text = code_pool.pop(target_email, "")
@@ -1693,9 +1706,6 @@ def get_oai_code(
                             if code:
                                 print(f"[{cfg.ts()}] [SUCCESS] cloudmail (本项目极速) ({mask_email(target_email)}) 提取成功: {code}")
                                 return code
-
-                    except ImportError:
-                        print(f"[{cfg.ts()}] [ERROR] 无法导入内存池！")
                 else:
                     token = get_cm_token(mail_proxies)
                     if token:
@@ -2142,8 +2152,8 @@ def get_oai_code(
 
             elif mode == "openai_cpa":
                 if getattr(cfg, 'OPENAI_CPA_WEBHOOK_SECRET', ""):
-                    try:
-                        from utils.auth_core import code_pool
+                    code_pool = _get_authcore_code_pool()
+                    if code_pool is not None:
                         target_email = email.lower().strip()
                         if target_email in code_pool:
                             raw_text = code_pool.get(target_email, "")
@@ -2153,12 +2163,10 @@ def get_oai_code(
                                 print(
                                     f"[{cfg.ts()}] [SUCCESS] 项目专属邮箱 OPENAI-CPA ({mask_email(target_email)}) 提取成功: {code}")
                                 return code
-                    except ImportError:
-                        print(f"[{cfg.ts()}] [ERROR] 无法导入内存池！")
             elif mode == "freemail":
                 if getattr(cfg, 'FREEMAIL_LOCAL_WEBHOOK', False):
-                    try:
-                        from utils.auth_core import code_pool
+                    code_pool = _get_authcore_code_pool()
+                    if code_pool is not None:
                         target_email = email.lower().strip()
                         if target_email in code_pool:
                             raw_text = code_pool.pop(target_email, "")
@@ -2175,9 +2183,6 @@ def get_oai_code(
                             if code:
                                 print(f"[{cfg.ts()}] [SUCCESS] freemail (本项目极速) ({mask_email(target_email)}) 提取成功: {code}")
                                 return code
-
-                    except ImportError:
-                        print(f"[{cfg.ts()}] [ERROR] 无法导入内存池！")
                 else:
                     headers = {
                         "Content-Type": "application/json",

@@ -56,7 +56,9 @@ def _load_register_backend():
 
 
 def run(proxy, run_ctx=None):
-    _, run_func, _ = _load_register_backend()
+    backend, run_func, _ = _load_register_backend()
+    backend_label = "上游 auth_pipeline" if backend == "auth_pipeline" else "本地 legacy"
+    print(f"[{ts()}] [INFO] 当前注册后端: {backend_label}")
     return run_func(proxy, run_ctx=run_ctx)
 
 from utils.proxy_manager import smart_switch_node
@@ -1778,6 +1780,9 @@ class RegEngine:
 
     def _perform_initial_cleanup(self):
         if not getattr(cfg, 'TEAM_MODE_ENABLE', False):
+            return
+        if str(getattr(cfg, "REGISTER_BACKEND", "legacy") or "legacy").strip().lower() != "auth_pipeline":
+            print(f"[{cfg.ts()}] [系统] 当前为本地 legacy 注册流程，跳过 auth_core 开局清理。")
             return
 
         print(f"[{cfg.ts()}] [系统] 🚀 正在执行开局环境初始化，请不要着急耐心等待...")
