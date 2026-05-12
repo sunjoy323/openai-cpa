@@ -54,7 +54,7 @@ AUTH_URL            = "https://auth.openai.com/oauth/authorize"
 TOKEN_URL           = "https://auth.openai.com/oauth/token"
 CLIENT_ID           = "app_EMoamEEZ73f0CkXaXp7hrann"
 DEFAULT_REDIRECT_URI = "http://localhost:1455/auth/callback"
-DEFAULT_SCOPE       = "openid email profile offline_access"
+DEFAULT_SCOPE       = "openid profile email offline_access"
 
 FIRST_NAMES = [
     "James", "John", "Robert", "Michael", "William", "David", "Richard",
@@ -595,6 +595,17 @@ def _extract_next_url(data: Dict[str, Any]) -> str:
     }
     return mapping.get(page_type, "")
 
+
+def _is_passwordless_or_takeover_next(data: Dict[str, Any], continue_url: str = "") -> bool:
+    next_url = str(continue_url or _extract_next_url(data) or "").strip()
+    page_type = str((data.get("page") or {}).get("type") or "").strip()
+    return (
+        "log-in" in next_url
+        or "/email-verification" in next_url
+        or page_type == "email_otp_verification"
+    )
+
+
 @dataclass(frozen=True)
 class OAuthStart:
     auth_url:       str
@@ -619,7 +630,7 @@ def generate_oauth_url(
         "state":                      state,
         "code_challenge":             code_challenge,
         "code_challenge_method":      "S256",
-        "prompt":                     "login",
+        # "prompt": "login",
         "id_token_add_organizations": "true",
         "codex_cli_simplified_flow":  "true",
     }
@@ -1525,7 +1536,7 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
             s_reg,
             "https://auth.openai.com/api/accounts/authorize/continue",
             headers=signup_headers,
-            json_body={"username": {"value": email, "kind": "email"}, "screen_hint": "signup"},
+            json_body={"username": {"value": email, "kind": "email"}, "screen_hint": "login_or_signup"},
             proxies=proxies,
         )
 
@@ -1538,10 +1549,15 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
 
         signup_json = _json_dict(signup_resp)
         signup_continue_url = _extract_next_url(signup_json)
+        signup_page_type = str((signup_json.get("page") or {}).get("type") or "").strip()
+        print(
+            f"[{cfg.ts()}] [DEBUG] 注册邮箱提交成功，下一步: "
+            f"continue_url={signup_continue_url or '<empty>'}, page_type={signup_page_type or '<empty>'}"
+        )
 
-        if "log-in" in str(signup_continue_url or ""):
+        if _is_passwordless_or_takeover_next(signup_json, signup_continue_url):
             is_takeover = True
-            print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）该邮箱已注册，转入无密码邮箱验证码接管流程。")
+            print(f"[{cfg.ts()}] [WARNING] （{mask_email(email)}）该邮箱无需密码注册或已存在，转入无密码验证码流程。")
 
             takeover_referer = str(signup_continue_url or "").strip()
             if takeover_referer and not takeover_referer.startswith("http"):
@@ -1660,13 +1676,27 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
             create_account_json = _json_dict(code_resp)
             target_continue_url = _extract_next_url(create_account_json)
         else:
+            password_referer = "https://auth.openai.com/create-account/password"
+            if signup_continue_url:
+                password_referer = signup_continue_url
+                if not password_referer.startswith("http"):
+                    password_referer = f"https://auth.openai.com{password_referer}"
+                try:
+                    _, password_referer = _follow_redirect_chain_local(
+                        s_reg, password_referer, proxies, stage="signup_password_page"
+                    )
+                    print(f"[{cfg.ts()}] [DEBUG] 密码页会话已就绪: {password_referer}")
+                except Exception as exc:
+                    print(f"[{cfg.ts()}] [WARNING] 访问密码页失败，将继续直接提交密码: {exc}")
+                    password_referer = "https://auth.openai.com/create-account/password"
+
             sentinel_reg = _challenge_token(
                 s_reg, "username_password_create", proxies, use=True, ctx=reg_ctx
             )
             pwd_headers = _oai_headers(
                 did,
                 {
-                    "Referer": "https://auth.openai.com/create-account/password",
+                    "Referer": password_referer,
                     "content-type": "application/json",
                 },
             )
