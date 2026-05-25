@@ -237,12 +237,13 @@ services:
     image: wenfxl/wenfxl-codex-manager:latest
     container_name: wenfxl_codex_manager
     ports:
-      - "8000:8000"
+      - "${HOST_WEB_PORT:-8000}:8000"
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       - HOST_PROJECT_PATH=${PWD}
+      - WEB_PORT=8000
     volumes:
       - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -305,6 +306,14 @@ services:
 docker compose up -d
 ```
 
+To expose the Web Console on a different host port, create `.env` in the project directory:
+
+```env
+HOST_WEB_PORT=8899
+```
+
+Use `HOST_WEB_PORT` only for the host-side port. The container-side application port is fixed to `8000` to avoid Docker forwarding to the wrong internal port.
+
 3. View logs if needed:
 
 ```bash
@@ -350,7 +359,7 @@ docker-compose pull wenfxl/wenfxl-codex-manager:latest
 config directly
 Notes:
 - `./data:/app/data` is used to persist runtime data, local database content, exports, and container-side configuration files.
-- The Docker Web Console is exposed on port `8000` by default.
+- The Docker Web Console is exposed on host port `8000` by default, or `HOST_WEB_PORT` when configured in `.env`.
 - Default Web Console password: `admin`
 - The current compose file uses image tag `wenfxl/wenfxl-codex-manager:latest`.
 

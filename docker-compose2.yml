@@ -5,7 +5,7 @@ services:
     image: wenfxl/wenfxl-codex-manager:latest
     container_name: wenfxl_codex_manager
     ports:
-      - "${WEB_PORT:-8000}:8000"
+      - "${HOST_WEB_PORT:-8000}:8000"
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -16,6 +16,7 @@ services:
       - .:${PWD}
     environment:
       - HOST_PROJECT_PATH=${PWD}
+      - WEB_PORT=8000
       - TZ=Asia/Shanghai
       - DB_TYPE=mysql
       - DB_HOST=你的云端MySQL地址
