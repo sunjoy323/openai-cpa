@@ -251,14 +251,69 @@
 	margin-left: auto;
 	flex: 0 0 auto;
 }
-.console-mode-switch {
-	width: clamp(76px, 5.8vw, 94px);
+.console-flow-control {
+	width: auto;
 	flex: 0 0 auto;
+}
+.console-flow-control-inner {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
 }
 .console-mode-switch-inner {
 	display: grid;
 	grid-template-columns: 1fr;
-	width: 100%;
+	width: clamp(64px, 4.8vw, 78px);
+	flex: 0 0 auto;
+}
+.console-backend-select {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: clamp(34px, 2.45vw, 38px);
+	padding: 3px 8px;
+	border-radius: 14px;
+	border: 1px solid rgb(226 232 240);
+	background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.92));
+	box-shadow: inset 0 1px 0 rgba(255,255,255,0.86), 0 8px 18px rgba(15, 23, 42, 0.06);
+	color: rgb(71 85 105);
+	white-space: nowrap;
+}
+.console-backend-select-label {
+	font-size: clamp(10px, 0.68vw, 12px);
+	font-weight: 900;
+	letter-spacing: 0.08em;
+	color: rgb(100 116 139);
+}
+.console-backend-select-input {
+	appearance: none;
+	min-width: 52px;
+	max-width: 72px;
+	border: 0;
+	border-radius: 10px;
+	background: rgb(255 255 255);
+	color: rgb(5 150 105);
+	font-size: clamp(11px, 0.76vw, 13px);
+	font-weight: 900;
+	line-height: 1;
+	padding: 7px 18px 7px 9px;
+	box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+	outline: none;
+	cursor: pointer;
+}
+.console-backend-select::after {
+	content: "";
+	position: absolute;
+	right: 11px;
+	top: 50%;
+	width: 6px;
+	height: 6px;
+	border-right: 2px solid rgb(148 163 184);
+	border-bottom: 2px solid rgb(148 163 184);
+	transform: translateY(-65%) rotate(45deg);
+	pointer-events: none;
 }
 .console-toolbar-btn,
 .console-status-pill,
@@ -366,17 +421,43 @@
 		justify-content: flex-start;
 		align-items: center;
 	}
-	.console-mode-switch {
+	.console-flow-control {
 		width: auto;
-		flex: 1 1 0;
+		flex: 1.2 1 0;
 		min-width: 0;
 	}
-	.console-mode-switch .flex {
+	.console-flow-control-inner {
 		width: 100%;
+		gap: 3px;
 	}
 	.console-mode-switch-inner {
-		width: 100%;
+		width: auto;
+		flex: 0.72 1 0;
 		padding: 0;
+	}
+	.console-backend-select {
+		flex: 1 1 0;
+		min-width: 0;
+		height: 34px;
+		padding: 2px 5px;
+		gap: 3px;
+		border-radius: 12px;
+	}
+	.console-backend-select-label {
+		display: none;
+	}
+	.console-backend-select-input {
+		width: 100%;
+		min-width: 0;
+		max-width: none;
+		padding: 5px 14px 5px 6px;
+		font-size: 8px;
+		text-align: center;
+	}
+	.console-backend-select::after {
+		right: 8px;
+		width: 5px;
+		height: 5px;
 	}
 	.console-topbar-actions > .console-topbar-actions {
 		display: flex;
