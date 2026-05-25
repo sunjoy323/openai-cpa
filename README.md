@@ -52,8 +52,9 @@ pip install -r requirements.txt
 ## ☕ Buy me a coffee
 
 If you find this tool helpful or if it has saved you time, consider buying me a coffee! Your support is a great motivation for continuous maintenance and updates.
-- ⚡ **Afdian:** [https://ifdian.net/a/wenfxl](https://ifdian.net/a/wenfxl)
-- 🪙 **USDT (TRX/Tron/TRC20):** `TLMNmyfUajfGSBhUfJ1orqxpvv7BWFnDqN`
+- **Afdian:** [https://ifdian.net/a/wenfxl](https://ifdian.net/a/wenfxl)
+- **USDT (TRX/Tron/TRC20):** `TLMNmyfUajfGSBhUfJ1orqxpvv7BWFnDqN`
+- **USDT (BSC/BNB Smart Chain/BEP20):** `0x2da26c472097f269217390e44ff00c7d087699a6`
 
 ## Web Console Preview
 
@@ -525,6 +526,16 @@ Check the following:
 - Prefer stronger secret handling for mailbox admin credentials, CPA tokens, and Clash controller secrets.
 - Restrict access to the output directory.
 - If used in a team environment, add audit logging and permission boundaries.
+
+## Contributors
+
+Thanks to all the developers who have contributed to this project:
+
+<a href="https://github.com/kamill7779"><img src="https://wsrv.nl/?url=github.com/kamill7779.png&mask=circle" width="80" title="kamill7779" alt="kamill7779"></a>
+<a href="https://github.com/s12ryt"><img src="https://wsrv.nl/?url=github.com/s12ryt.png&mask=circle" width="80" title="s12ryt" alt="s12ryt"></a>
+<a href="https://github.com/SYFATP"><img src="https://wsrv.nl/?url=github.com/SYFATP.png&mask=circle" width="80" title="SYFATP" alt="SYFATP"></a>
+<a href="https://github.com/YuHaiA"><img src="https://wsrv.nl/?url=github.com/YuHaiA.png&mask=circle" width="80" title="YuHaiA" alt="YuHaiA"></a>
+<a href="https://github.com/haocenchen-debug"><img src="https://wsrv.nl/?url=github.com/haocenchen-debug.png&mask=circle" width="80" title="haocenchen-debug" alt="haocenchen-debug"></a>
 
 ## Terms of Use & License
 

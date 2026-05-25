@@ -293,6 +293,18 @@ function normalizeBooleanLike(value, defaultValue = false) {
     return defaultValue;
 }
 
+function normalizeMailDomainCsv(value) {
+    const seen = new Set();
+    return String(value || '')
+        .split(',')
+        .map(part => String(part || '').trim().toLowerCase().replace(/^\.+|\.+$/g, ''))
+        .filter(part => {
+            if (!part || seen.has(part)) return false;
+            seen.add(part);
+            return true;
+        });
+}
+
 createApp({
     data() {
         return {
@@ -305,6 +317,9 @@ createApp({
             isDarkMode: localStorage.getItem('ui_theme_mode') === 'dark',
 			showAccountsPlaintext: false,
             isRunning: false,
+            isLoadingConfig: false,
+            configLoadError: '',
+            mobileNavOpen: false,
             tabs: [
                     { id: 'console', name: '运行主页', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>' },
                     { id: 'cluster', name: '集群总控', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>' },
@@ -355,9 +370,13 @@ createApp({
             mailDomainRuntimeStatsError: '',
             mailDomainRuntimePanelCollapsed: normalizeBooleanLike(localStorage.getItem('mail_domain_runtime_panel_collapsed'), false),
             mailDomainRuntimeLastFetchAt: 0,
+            mailDomainRuntimePollIntervalMs: 2500,
+            mailDomainRuntimeFetchPromise: null,
+            mailDomainRuntimeFetchQueued: false,
             blacklistStr: "",
             warpListStr: "",
             rawProxyListStr: "",
+            accountStatusFilter: 'all',
             accounts: [],
             selectedAccounts: [],
             hideRegisterOnlyAccounts: false,
@@ -380,8 +399,26 @@ createApp({
             memoryPrediction: null,
             isLoadingMemoryPrediction: false,
             memoryPredictionError: '',
+            cleanupMaintenance: {
+                loading: false,
+                actionLoading: false,
+                data: null,
+                error: '',
+                outputTail: []
+            },
             inventoryStats: {
-                local: { total: 0, active: 0, disabled: 0 },
+                local: {
+                    total: 0,
+                    active: 0,
+                    disabled: 0,
+                    unpushed: 0,
+                    pushed: 0,
+                    credential: 0,
+                    image2api: 0,
+                    with_token: 0,
+                    reg_only: 0,
+                    imgsub2api: 0
+                },
                 cloud: { total: 0, cpa: 0, sub2api: 0, enabled: 0 }
             },
             statsTimer: null,
@@ -413,6 +450,15 @@ createApp({
             toastId: 0,
             confirmModal: { show: false, message: '', resolve: null },
             updateInfo: { hasUpdate: false, version: '', url: '', changelog: '' },
+            gitSync: {
+                loading: false,
+                actionLoading: false,
+                data: null,
+                error: '',
+                lastAction: '',
+                outputTail: [],
+                restartAfter: true
+            },
             sub2apiGroups: [],
             gmailOAuth: {
                 authUrl: '',
@@ -422,12 +468,20 @@ createApp({
             },
             isLoadingSub2APIGroups: false,
             cloudAccounts: [],
+            rawCloudAccounts: [],
             selectedCloud: [],
             cloudFilters: ['sub2api', 'cpa', "image2api"],
             showCloudPlaintext: false,
             cloudPage: 1,
             cloudPageSize: 10,
             cloudTotal: 0,
+            cloudFetchState: {
+                loading: false,
+                currentType: '',
+                completed: 0,
+                total: 0,
+                message: ''
+            },
             localCheckTimes: {},
             localCloudDetails: {},
             isCloudActionLoading: false,
@@ -435,6 +489,9 @@ createApp({
             currentCloudDetail: null,
             nowTimestamp: Math.floor(Date.now() / 1000),
             clusterNodes: {},
+            clusterSyncTasks: [],
+            clusterSyncTasksLoading: false,
+            showClusterSyncErrors: true,
             mailboxes: [],
             selectedMailboxes: [],
             mailboxPage: 1,
@@ -460,7 +517,20 @@ createApp({
                 count: 5,
                 instances: [],
                 groups: [],
-                isDeploying: false
+                subscriptions: [],
+                mode: '',
+                message: '',
+                isDeploying: false,
+                runtimeActionLoading: false,
+                subscriptionActionLoading: false,
+                delayLoading: false,
+                activeGroupName: '',
+                view: 'groups',
+                nodeSelections: {},
+                delayResults: {},
+                newSubscriptionName: '',
+                newSubscriptionUrl: '',
+                makeSelectedSubscription: true
             },
             gmail_oauth_mode: {
                 master_email: '',
@@ -486,6 +556,7 @@ createApp({
             isLoadingFivesimPrices: false,
             isRestarting: false,
             isRefreshingAccounts: false,
+            isTestingTg: false,
             teamAccounts: [],
             showImportTeamModal: false,
             importTeamText: '',
@@ -502,11 +573,13 @@ createApp({
             },
             cfTools: {
                 workerName: 'openai-cpa',
+                deleteDomains: '',
                 results: [],
                 isHosting: false,
                 isEnablingEmail: false,
                 isDeploying: false,
-                isSettingCatchAll: false
+                isSettingCatchAll: false,
+                isDeletingHosting: false
             },
             isUpdatingSystem: false,
         };
@@ -556,6 +629,9 @@ createApp({
     beforeUnmount() {
         if(this.statsTimer) clearInterval(this.statsTimer);
         if (this.languageObserver) this.languageObserver.disconnect();
+        if (typeof document !== 'undefined') {
+            document.body.classList.remove('overflow-hidden');
+        }
     },
 	computed: {
         totalPages() {
@@ -570,12 +646,16 @@ createApp({
             return res;
         },
         filteredCloud() {
-            let res = this.cloudAccounts;
-            if (this.searchCloud) {
-                const term = this.searchCloud.toLowerCase();
-                res = res.filter(a => a.credential && a.credential.toLowerCase().includes(term));
-            }
-            return res;
+            return this.cloudAccounts;
+        },
+        activeCloudFilterLabel() {
+            if (!this.cloudFetchState.currentType) return '待命';
+            const labels = {
+                sub2api: 'Sub2API',
+                cpa: 'CPA',
+                image2api: 'Image2API'
+            };
+            return labels[this.cloudFetchState.currentType] || this.cloudFetchState.currentType;
         },
         filteredMailboxes() {
             let res = this.mailboxes;
@@ -599,6 +679,71 @@ createApp({
         },
         cooldownMailDomainCount() {
             return this.mailDomainRuntimeStats.filter(item => item && !item.is_available).length;
+        },
+        activeClashGroup() {
+            if (!this.clashPool?.activeGroupName) return null;
+            return (this.clashPool.groups || []).find(group => group.name === this.clashPool.activeGroupName) || null;
+        },
+        selectedClashSubscription() {
+            return (this.clashPool?.subscriptions || []).find(item => item.selected) || null;
+        },
+        normalizedMailDomains() {
+            if (!this.config) return [];
+            return normalizeMailDomainCsv(this.config.mail_domains);
+        },
+        autoMailDomainGroupsPreview() {
+            if (!this.config || !this.config.enable_mail_domain_grouping || this.config.mail_domain_group_mode !== 'auto') {
+                return [];
+            }
+            const domains = this.normalizedMailDomains;
+            const groupCount = Math.min(10, Math.max(1, parseInt(this.config.mail_domain_group_count, 10) || 0));
+            if (domains.length === 0 || groupCount < 1 || groupCount > domains.length) {
+                return [];
+            }
+            const groups = Array.from({ length: groupCount }, () => []);
+            domains.forEach((domain, index) => {
+                groups[index % groupCount].push(domain);
+            });
+            return groups;
+        },
+        mailDomainGroupLabelMap() {
+            if (!this.config || !this.config.enable_mail_domain_grouping) {
+                return {};
+            }
+            const groups = this.config.mail_domain_group_mode === 'manual'
+                ? this.config.mail_domain_groups
+                    .map(group => normalizeMailDomainCsv(group))
+                    .filter(group => group.length > 0)
+                : this.autoMailDomainGroupsPreview;
+            return groups.reduce((map, group, index) => {
+                group.forEach(domain => {
+                    map[domain] = `[${index + 1}]`;
+                });
+                return map;
+            }, {});
+        },
+        sortedMailDomainRuntimeStats() {
+            if (!this.config || !this.config.enable_mail_domain_grouping) {
+                return this.mailDomainRuntimeStats;
+            }
+            const groups = this.config.mail_domain_group_mode === 'manual'
+                ? this.config.mail_domain_groups
+                    .map(group => normalizeMailDomainCsv(group))
+                    .filter(group => group.length > 0)
+                : this.autoMailDomainGroupsPreview;
+            const orderMap = groups.reduce((map, group, groupIndex) => {
+                group.forEach((domain, domainIndex) => {
+                    map[domain] = { groupIndex, domainIndex };
+                });
+                return map;
+            }, {});
+            return [...this.mailDomainRuntimeStats].sort((a, b) => {
+                const left = orderMap[a?.domain] || { groupIndex: Number.MAX_SAFE_INTEGER, domainIndex: Number.MAX_SAFE_INTEGER };
+                const right = orderMap[b?.domain] || { groupIndex: Number.MAX_SAFE_INTEGER, domainIndex: Number.MAX_SAFE_INTEGER };
+                if (left.groupIndex !== right.groupIndex) return left.groupIndex - right.groupIndex;
+                if (left.domainIndex !== right.domainIndex) return left.domainIndex - right.domainIndex;
+                return String(a?.domain || '').localeCompare(String(b?.domain || ''));
+            });
         }
     },
     methods: {
@@ -607,6 +752,44 @@ createApp({
         },
         targetLanguageLabel() {
             return this.currentLanguage === TRADITIONAL_LANGUAGE ? '简体中文' : '繁體中文';
+        },
+        resolveClashSubscriptionUrl(rawUrl) {
+            const text = String(rawUrl || '').trim();
+            if (!text) return '';
+            if (/^https?:\/\//i.test(text)) return text;
+            if (text.startsWith('//')) return `${window.location.protocol}${text}`;
+            const base = window.location.origin.replace(/\/+$/, '');
+            if (text.startsWith('/')) return `${base}${text}`;
+            return `${base}/${text.replace(/^\.?\//, '')}`;
+        },
+        isMobileViewport() {
+            return typeof window !== 'undefined' && window.innerWidth < 768;
+        },
+        toggleMobileNav(forceState = null) {
+            const nextState = typeof forceState === 'boolean' ? forceState : !this.mobileNavOpen;
+            this.mobileNavOpen = nextState;
+            if (typeof document !== 'undefined') {
+                document.body.classList.toggle('overflow-hidden', nextState && this.isMobileViewport());
+            }
+        },
+        formatClashSubscriptionLabel(subscription) {
+            if (!subscription) return '未命名订阅';
+            const name = String(subscription.name || '').trim();
+            if (name && name !== '当前订阅') return name;
+            const source = String(subscription.url || subscription.raw_url || '').trim();
+            try {
+                const parsed = new URL(source);
+                const target = parsed.searchParams.get('url');
+                if (target) {
+                    const targetUrl = new URL(target);
+                    const lastSeg = targetUrl.pathname.split('/').filter(Boolean).pop();
+                    return `${targetUrl.hostname}${lastSeg ? ' / ' + lastSeg : ''}`;
+                }
+                const lastSeg = parsed.pathname.split('/').filter(Boolean).pop();
+                return `${parsed.hostname}${lastSeg ? ' / ' + lastSeg : ''}`;
+            } catch (_) {
+                return name || '未命名订阅';
+            }
         },
         toggleLanguage() {
             const nextLanguage = this.currentLanguage === TRADITIONAL_LANGUAGE ? DEFAULT_LANGUAGE : TRADITIONAL_LANGUAGE;
@@ -725,6 +908,9 @@ createApp({
             this.applyTheme();
             this.showToast(this.isDarkMode ? '已切换为护眼模式' : '已切换为日间模式', 'info');
         },
+        isDefaultClusterSecret(secret) {
+            return ['','wenfxl666'].includes(String(secret || '').trim());
+        },
         showToast(message, type = 'info') {
             const id = this.toastId++;
             this.toasts.push({ id, message: this.t(message), type });
@@ -780,6 +966,24 @@ createApp({
             return classes[level] || classes.unknown;
         },
 
+        memoryRecommendationClass(level) {
+            const classes = {
+                ok: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                watch: 'bg-sky-50 text-sky-700 border-sky-200',
+                warning: 'bg-amber-50 text-amber-700 border-amber-200',
+                critical: 'bg-rose-50 text-rose-700 border-rose-200',
+                unknown: 'bg-slate-50 text-slate-600 border-slate-200'
+            };
+            return classes[level] || classes.unknown;
+        },
+
+        gitSyncStateClass(data) {
+            if (!data) return 'bg-slate-50 text-slate-600 border-slate-200';
+            if (!data.is_clean) return 'bg-amber-50 text-amber-700 border-amber-200';
+            if ((data.behind || 0) > 0) return 'bg-sky-50 text-sky-700 border-sky-200';
+            return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+        },
+
         async fetchMemoryPrediction() {
             if (!this.isLoggedIn) return;
             this.isLoadingMemoryPrediction = true;
@@ -796,6 +1000,156 @@ createApp({
                 this.memoryPredictionError = '内存预测 API 请求失败';
             } finally {
                 this.isLoadingMemoryPrediction = false;
+            }
+        },
+
+        async applyMemoryRecommendation() {
+            const suggested = this.memoryPrediction?.recommendation?.suggested_config;
+            if (!suggested || !this.config) {
+                this.showToast('当前没有可套用的建议配置', 'warning');
+                return;
+            }
+
+            this.config.enable_multi_thread_reg = !!suggested.enable_multi_thread_reg;
+            this.config.reg_threads = suggested.reg_threads ?? this.config.reg_threads;
+            if (!this.config.cpa_mode || typeof this.config.cpa_mode !== 'object') {
+                this.config.cpa_mode = {};
+            }
+            if (!this.config.sub2api_mode || typeof this.config.sub2api_mode !== 'object') {
+                this.config.sub2api_mode = {};
+            }
+            this.config.cpa_mode.threads = suggested.cpa_threads ?? this.config.cpa_mode.threads;
+            this.config.sub2api_mode.threads = suggested.sub2api_threads ?? this.config.sub2api_mode.threads;
+            this.config.max_log_lines = suggested.max_log_lines ?? this.config.max_log_lines;
+
+            this.showToast('已回填建议值，正在保存配置...', 'info');
+            await this.saveConfig();
+        },
+
+        async applyMemoryRecommendationAndRestart() {
+            const suggested = this.memoryPrediction?.recommendation?.suggested_config;
+            if (!suggested || !this.config) {
+                this.showToast('当前没有可套用的建议配置', 'warning');
+                return;
+            }
+            const confirmed = await this.customConfirm('确定要套用建议配置并立即重启项目吗？\n这适合服务器已经明显吃紧、需要尽快释放压力的场景。');
+            if (!confirmed) return;
+            await this.applyMemoryRecommendation();
+            await this.restartSystem();
+        },
+
+        async fetchCleanupStatus(showToast = false) {
+            if (!this.isLoggedIn) return;
+            this.cleanupMaintenance.loading = true;
+            this.cleanupMaintenance.error = '';
+            try {
+                const res = await this.authFetch('/api/system/cleanup_status');
+                const payload = await res.json();
+                if (payload.status === 'success' || payload.status === 'warning') {
+                    this.cleanupMaintenance.data = payload.data || null;
+                    if (payload.status === 'warning') {
+                        this.cleanupMaintenance.error = payload.message || '';
+                    } else if (showToast) {
+                        this.showToast(payload.message || '清理状态已刷新', 'success');
+                    }
+                } else {
+                    this.cleanupMaintenance.error = payload.message || '清理状态获取失败';
+                }
+            } catch (e) {
+                this.cleanupMaintenance.error = '清理状态请求失败';
+            } finally {
+                this.cleanupMaintenance.loading = false;
+            }
+        },
+
+        async runCleanup(force = false) {
+            const confirmed = await this.customConfirm(force ? '确定要强制执行磁盘 / 日志清理吗？\n即使磁盘占用还没到阈值，也会立刻清理日志、缓存和临时文件。' : '确定要执行磁盘 / 日志清理吗？');
+            if (!confirmed) return;
+            this.cleanupMaintenance.actionLoading = true;
+            this.cleanupMaintenance.error = '';
+            try {
+                const res = await this.authFetch('/api/system/run_cleanup', {
+                    method: 'POST',
+                    body: JSON.stringify({ force })
+                });
+                const payload = await res.json();
+                this.cleanupMaintenance.outputTail = payload?.data?.output_tail || [];
+                this.cleanupMaintenance.data = payload?.data?.status || this.cleanupMaintenance.data;
+                if (payload.status === 'success') {
+                    this.showToast(payload.message || '清理完成', 'success');
+                } else {
+                    this.cleanupMaintenance.error = payload.message || '清理失败';
+                    this.showToast(this.cleanupMaintenance.error, 'error');
+                }
+            } catch (e) {
+                this.cleanupMaintenance.error = '清理请求失败';
+                this.showToast(this.cleanupMaintenance.error, 'error');
+            } finally {
+                this.cleanupMaintenance.actionLoading = false;
+                await this.fetchCleanupStatus(false);
+            }
+        },
+
+        async fetchGitSyncStatus(showToast = false) {
+            if (!this.isLoggedIn) return;
+            this.gitSync.loading = true;
+            this.gitSync.error = '';
+            try {
+                const res = await this.authFetch('/api/system/git_status');
+                const payload = await res.json();
+                if (payload.status === 'success' || payload.status === 'warning') {
+                    this.gitSync.data = payload.data || null;
+                    this.gitSync.outputTail = [];
+                    if (payload.status === 'warning') {
+                        this.gitSync.error = payload.message || 'Git 状态读取失败';
+                    } else if (showToast) {
+                        this.showToast(payload.message || 'Git 状态已刷新', 'success');
+                    }
+                } else {
+                    this.gitSync.error = payload.message || 'Git 状态读取失败';
+                }
+            } catch (e) {
+                this.gitSync.error = 'Git 状态请求失败';
+            } finally {
+                this.gitSync.loading = false;
+            }
+        },
+
+        async runGitSyncAction(action) {
+            const isReset = action === 'reset_hard';
+            const confirmText = isReset
+                ? `⚠️ 危险操作：\n\n确定要强制覆盖本地代码并同步到远端跟踪分支吗？\n这会直接丢弃当前未提交改动。${this.gitSync.restartAfter ? '\n同步完成后会自动重启项目。' : ''}`
+                : '确定要抓取远端最新 Git 状态吗？';
+            const confirmed = await this.customConfirm(confirmText);
+            if (!confirmed) return;
+
+            this.gitSync.actionLoading = true;
+            this.gitSync.lastAction = action;
+            try {
+                const res = await this.authFetch('/api/system/git_update', {
+                    method: 'POST',
+                    body: JSON.stringify({ action, restart_after: isReset ? !!this.gitSync.restartAfter : false })
+                });
+                const payload = await res.json();
+                this.gitSync.outputTail = payload?.data?.output_tail || [];
+                    if (payload.status === 'success') {
+                        this.gitSync.data = payload?.data?.after || this.gitSync.data;
+                        this.showToast(payload.message || 'Git 操作完成', 'success');
+                        if (payload?.data?.restart_scheduled) {
+                        this.showToast('项目正在重启，页面将在 6 秒后自动刷新...', 'info');
+                        setTimeout(() => window.location.reload(), 6000);
+                        }
+                    } else {
+                    this.gitSync.data = payload?.data?.after || this.gitSync.data;
+                    this.gitSync.error = payload.message || 'Git 操作失败';
+                    this.showToast(this.gitSync.error, payload.status === 'warning' ? 'warning' : 'error');
+                }
+            } catch (e) {
+                this.gitSync.error = 'Git 操作请求失败';
+                this.showToast(this.gitSync.error, 'error');
+            } finally {
+                this.gitSync.actionLoading = false;
+                await this.fetchGitSyncStatus(false);
             }
         },
 
@@ -820,6 +1174,10 @@ createApp({
         logout() {
             localStorage.removeItem('auth_token');
             this.isLoggedIn = false;
+            this.mobileNavOpen = false;
+            if (typeof document !== 'undefined') {
+                document.body.classList.remove('overflow-hidden');
+            }
             this.loginPassword = '';
 			this.logs = [];
             Object.keys(this.showPwd).forEach(k => this.showPwd[k] = false);
@@ -833,7 +1191,7 @@ createApp({
             await this.fetchConfig();
             this.fetchManualReviewAccounts();
             if (this.config?.enable_mail_domain_runtime_control) {
-                await this.fetchMailDomainRuntimeStats();
+                await this.fetchMailDomainRuntimeStats({ force: true });
             } else {
                 this.mailDomainRuntimeStats = [];
                 this.mailDomainRuntimeStatsError = '';
@@ -850,19 +1208,44 @@ createApp({
             if (this.config && this.config.reg_mode === 'extension') {
                 this.listenToExtension();
             }
+            if (this.currentTab === 'cluster') {
+                this.fetchClusterSyncTasks();
+            }
             if (this.currentTab === 'proxy') {
                 this.fetchClashPool();
             }
             if (this.currentTab === 'concurrency') {
                 this.fetchMemoryPrediction();
+                this.fetchGitSyncStatus(false);
+                this.fetchCleanupStatus(false);
             }
         },
         startStatsPolling() {
             if(this.statsTimer) clearTimeout(this.statsTimer);
             this.pollStats();
         },
+        shouldPollMailDomainRuntimeStats() {
+            return !!(
+                this.currentTab === 'email' &&
+                this.isRunning &&
+                this.config?.enable_mail_domain_runtime_control &&
+                !this.mailDomainRuntimePanelCollapsed
+            );
+        },
+        queuePollStats() {
+            if (this._pollStatsInFlight) {
+                this._pollStatsQueued = true;
+                return;
+            }
+            this.pollStats();
+        },
         async pollStats() {
             if(!this.isLoggedIn) return;
+            if (this._pollStatsInFlight) {
+                this._pollStatsQueued = true;
+                return;
+            }
+            this._pollStatsInFlight = true;
             try {
                 const res = await this.authFetch('/api/stats');
                 const data = await res.json();
@@ -889,13 +1272,10 @@ createApp({
                 }
 
                 if (
-                    this.currentTab === 'email' &&
-                    this.isRunning &&
-                    this.config?.enable_mail_domain_runtime_control &&
-                    !this.mailDomainRuntimePanelCollapsed &&
-                    Date.now() - this.mailDomainRuntimeLastFetchAt >= 1000
+                    this.shouldPollMailDomainRuntimeStats() &&
+                    Date.now() - this.mailDomainRuntimeLastFetchAt >= this.mailDomainRuntimePollIntervalMs
                 ) {
-                    this.fetchMailDomainRuntimeStats({ silent: true });
+                    await this.fetchMailDomainRuntimeStats({ silent: true });
                 }
 
                 if (this.currentTab === 'cluster') {
@@ -904,16 +1284,25 @@ createApp({
                     if (cData.status === 'success') {
                         this.clusterNodes = cData.nodes;
                     }
+                    await this.fetchClusterSyncTasks({ silent: true });
                 }
             } catch(e) {
 
             } finally {
+                this._pollStatsInFlight = false;
+                if (this._pollStatsQueued) {
+                    this._pollStatsQueued = false;
+                    this.queuePollStats();
+                    return;
+                }
                 this.statsTimer = setTimeout(() => {
-                    this.pollStats();
+                    this.queuePollStats();
                 }, 1000);
             }
         },
         async fetchConfig() {
+            this.isLoadingConfig = true;
+            this.configLoadError = '';
             try {
                 const res = await this.authFetch('/api/config');
                 this.config = await res.json();
@@ -948,6 +1337,7 @@ createApp({
                         this.config.smsbower.reuse_phone = normalizeBooleanLike(this.config.smsbower.reuse_phone, true);
                         this.config.smsbower.verify_on_register = normalizeBooleanLike(this.config.smsbower.verify_on_register, false);
                         if(this.config.smsbower.reuse_max === undefined) this.config.smsbower.reuse_max = 2;
+                        if(this.config.smsbower.use_proxy === undefined) this.config.smsbower.use_proxy = false;
                     }
 
                     if (!this.config.fivesim) {
@@ -958,11 +1348,13 @@ createApp({
                         };
                     } else {
                         if(this.config.fivesim.reuse_max === undefined) this.config.fivesim.reuse_max = 2;
+                        if(this.config.fivesim.use_proxy === undefined) this.config.fivesim.use_proxy = false;
                     }
 
                     if (this.config.hero_sms) {
                         this.config.hero_sms.enabled = normalizeBooleanLike(this.config.hero_sms.enabled, false);
                         if(this.config.hero_sms.reuse_max === undefined) this.config.hero_sms.reuse_max = 2;
+                        if(this.config.hero_sms.use_proxy === undefined) this.config.hero_sms.use_proxy = false;
                     }
                 }
 
@@ -1005,7 +1397,11 @@ createApp({
                     }
                 }
                 if (!this.config.team_mode) {
-                    this.config.team_mode = { enable: false };
+                    this.config.team_mode = { enable: false, overspeed: false };
+                } else {
+                    if (this.config.team_mode.overspeed === undefined) {
+                        this.config.team_mode.overspeed = false;
+                    }
                 }
                 if (!this.config.fvia) {
                     this.config.fvia = { token: '' };
@@ -1016,6 +1412,9 @@ createApp({
                 if (!this.config.max_log_lines) {
                     this.config.max_log_lines = 500;
                 }
+                let clusterUploadTimeout = parseInt(this.config.cluster_upload_timeout_sec, 10);
+                if (Number.isNaN(clusterUploadTimeout)) clusterUploadTimeout = 15;
+                this.config.cluster_upload_timeout_sec = Math.max(15, Math.min(3600, clusterUploadTimeout));
                 if (!this.config.temporam) {
                     this.config.temporam = { cookie: '' };
                 }
@@ -1101,6 +1500,33 @@ createApp({
                 )];
                 if (this.config.enable_mail_domain_runtime_control === undefined) this.config.enable_mail_domain_runtime_control = false;
                 this.config.enable_mail_domain_runtime_control = normalizeBooleanLike(this.config.enable_mail_domain_runtime_control, false);
+                if (this.config.enable_mail_domain_grouping === undefined) this.config.enable_mail_domain_grouping = false;
+                this.config.enable_mail_domain_grouping = normalizeBooleanLike(this.config.enable_mail_domain_grouping, false);
+                if (this.config.mail_domain_group_count === undefined) this.config.mail_domain_group_count = 2;
+                this.config.mail_domain_group_count = Math.min(10, Math.max(1, parseInt(this.config.mail_domain_group_count, 10) || 2));
+                if (this.config.mail_domain_group_mode === undefined) this.config.mail_domain_group_mode = 'auto';
+                this.config.mail_domain_group_mode = ['auto', 'manual'].includes(String(this.config.mail_domain_group_mode || '').trim().toLowerCase())
+                    ? String(this.config.mail_domain_group_mode || '').trim().toLowerCase()
+                    : 'auto';
+                if (this.config.mail_domain_group_strategy === undefined) this.config.mail_domain_group_strategy = 'round_robin';
+                this.config.mail_domain_group_strategy = ['round_robin', 'exhaust_then_next'].includes(String(this.config.mail_domain_group_strategy || '').trim().toLowerCase())
+                    ? String(this.config.mail_domain_group_strategy || '').trim().toLowerCase()
+                    : 'round_robin';
+                if (!Array.isArray(this.config.mail_domain_groups)) this.config.mail_domain_groups = [];
+                this.config.mail_domain_groups = this.config.mail_domain_groups
+                    .slice(0, this.config.mail_domain_group_count)
+                    .map(item => normalizeMailDomainCsv(item).join(','));
+                while (this.config.mail_domain_groups.length < this.config.mail_domain_group_count) {
+                    this.config.mail_domain_groups.push('');
+                }
+                if (this.config.mail_domain_pinpoint_burst_mode === undefined) this.config.mail_domain_pinpoint_burst_mode = false;
+                this.config.mail_domain_pinpoint_burst_mode = normalizeBooleanLike(this.config.mail_domain_pinpoint_burst_mode, false);
+                if (this.config.mail_domain_prefer_low_failure_mode === undefined) this.config.mail_domain_prefer_low_failure_mode = false;
+                this.config.mail_domain_prefer_low_failure_mode = normalizeBooleanLike(this.config.mail_domain_prefer_low_failure_mode, false);
+                if (this.config.mail_domain_pinpoint_burst_mode && this.config.mail_domain_prefer_low_failure_mode) {
+                    this.config.mail_domain_prefer_low_failure_mode = false;
+                }
+                this.applyMailDomainModeConstraints();
                 if (!Array.isArray(this.config.mail_domain_failure_types)) this.config.mail_domain_failure_types = ['discarded_email'];
                 this.config.mail_domain_failure_types = [...new Set(
                     this.config.mail_domain_failure_types
@@ -1110,39 +1536,156 @@ createApp({
                 if (this.config.mail_domain_failure_types.length === 0) this.config.mail_domain_failure_types = ['discarded_email'];
                 if (this.config.mail_domain_fail_threshold === undefined) this.config.mail_domain_fail_threshold = 3;
                 if (this.config.mail_domain_fail_cooldown_sec === undefined) this.config.mail_domain_fail_cooldown_sec = 600;
-            } catch (e) {}
+            } catch (e) {
+                this.configLoadError = e?.message === 'Unauthorized' ? '登录已失效，请重新登录' : '配置加载失败，请稍后重试';
+            } finally {
+                this.isLoadingConfig = false;
+            }
+        },
+        applyMailDomainModeExclusion(changedMode = '') {
+            this.applyMailDomainModeConstraints(changedMode);
+        },
+        applyMailDomainModeConstraints(changedMode = '') {
+            if (!this.config) return;
+            this.config.enable_mail_domain_grouping = normalizeBooleanLike(this.config.enable_mail_domain_grouping, false);
+            this.config.mail_domain_pinpoint_burst_mode = normalizeBooleanLike(this.config.mail_domain_pinpoint_burst_mode, false);
+            this.config.mail_domain_prefer_low_failure_mode = normalizeBooleanLike(this.config.mail_domain_prefer_low_failure_mode, false);
+            this.config.mail_domain_group_count = Math.min(10, Math.max(1, parseInt(this.config.mail_domain_group_count, 10) || 2));
+            this.config.mail_domain_group_mode = ['auto', 'manual'].includes(String(this.config.mail_domain_group_mode || '').trim().toLowerCase())
+                ? String(this.config.mail_domain_group_mode || '').trim().toLowerCase()
+                : 'auto';
+            this.config.mail_domain_group_strategy = ['round_robin', 'exhaust_then_next'].includes(String(this.config.mail_domain_group_strategy || '').trim().toLowerCase())
+                ? String(this.config.mail_domain_group_strategy || '').trim().toLowerCase()
+                : 'round_robin';
+            if (!Array.isArray(this.config.mail_domain_groups)) {
+                this.config.mail_domain_groups = [];
+            }
+            this.config.mail_domain_groups = this.config.mail_domain_groups
+                .slice(0, this.config.mail_domain_group_count)
+                .map(item => normalizeMailDomainCsv(item).join(','));
+            while (this.config.mail_domain_groups.length < this.config.mail_domain_group_count) {
+                this.config.mail_domain_groups.push('');
+            }
+            if (changedMode === 'grouping' && this.config.enable_mail_domain_grouping) {
+                this.config.mail_domain_pinpoint_burst_mode = false;
+            }
+            if (changedMode === 'pinpoint' && this.config.mail_domain_pinpoint_burst_mode) {
+                this.config.enable_mail_domain_grouping = false;
+            }
+            if (this.config.enable_mail_domain_grouping && this.config.mail_domain_pinpoint_burst_mode) {
+                if (changedMode === 'pinpoint') {
+                    this.config.enable_mail_domain_grouping = false;
+                } else {
+                    this.config.mail_domain_pinpoint_burst_mode = false;
+                }
+            }
+            if (this.config.mail_domain_pinpoint_burst_mode && this.config.mail_domain_prefer_low_failure_mode) {
+                if (changedMode === 'pinpoint') {
+                    this.config.mail_domain_prefer_low_failure_mode = false;
+                } else if (changedMode === 'low_failure') {
+                    this.config.mail_domain_pinpoint_burst_mode = false;
+                } else {
+                    this.config.mail_domain_prefer_low_failure_mode = false;
+                }
+            }
+        },
+        validateMailDomainGrouping() {
+            if (!this.config) return '';
+            this.applyMailDomainModeConstraints();
+            if (!this.config.enable_mail_domain_grouping) {
+                return '';
+            }
+            const masterDomains = normalizeMailDomainCsv(this.config.mail_domains);
+            if (masterDomains.length === 0) {
+                return '启用域名分组前请先填写 mail_domains';
+            }
+            const groupCount = Math.min(10, Math.max(1, parseInt(this.config.mail_domain_group_count, 10) || 0));
+            if (groupCount < 1 || groupCount > 10) {
+                return '分组数量必须在 1 到 10 之间';
+            }
+            if (groupCount > masterDomains.length) {
+                return '分组数量不能大于有效主域名数量';
+            }
+            if (this.config.mail_domain_group_mode !== 'manual') {
+                return '';
+            }
+            const masterSet = new Set(masterDomains);
+            const assigned = new Set();
+            for (let index = 0; index < groupCount; index += 1) {
+                const domains = normalizeMailDomainCsv(this.config.mail_domain_groups[index] || '');
+                if (domains.length === 0) {
+                    return `第 ${index + 1} 组至少需要填写一个域名`;
+                }
+                for (const domain of domains) {
+                    if (!masterSet.has(domain)) {
+                        return `第 ${index + 1} 组存在未配置在 mail_domains 中的域名: ${domain}`;
+                    }
+                    if (assigned.has(domain)) {
+                        return `域名 ${domain} 不能重复出现在多个分组中`;
+                    }
+                    assigned.add(domain);
+                }
+            }
+            const missing = masterDomains.filter(domain => !assigned.has(domain));
+            if (missing.length > 0) {
+                return `手动分组未覆盖所有主域名，缺少: ${missing.join(', ')}`;
+            }
+            return '';
+        },
+        normalizeMailDomainGroupInput(index) {
+            if (!this.config || !Array.isArray(this.config.mail_domain_groups)) return;
+            this.config.mail_domain_groups[index] = normalizeMailDomainCsv(this.config.mail_domain_groups[index]).join(',');
         },
         async fetchMailDomainRuntimeStats(options = {}) {
-            const { silent = false } = options;
+            const { silent = false, force = false } = options;
             if (!this.config?.enable_mail_domain_runtime_control) {
                 this.mailDomainRuntimeStats = [];
                 this.mailDomainRuntimeStatsError = '';
                 this.mailDomainRuntimeLastFetchAt = 0;
+                this.mailDomainRuntimeFetchPromise = null;
+                this.mailDomainRuntimeFetchQueued = false;
                 return;
             }
-            try {
-                const res = await this.authFetch('/api/config/mail_domain_runtime_stats');
-                const data = await res.json();
-                if (data.status === 'success' && Array.isArray(data.items)) {
-                    this.mailDomainRuntimeStats = data.items;
-                    this.mailDomainRuntimeStatsError = '';
-                    this.mailDomainRuntimeLastFetchAt = Date.now();
-                } else {
-                    this.mailDomainRuntimeStatsError = data.message || '域名运行时状态获取失败';
+            if (!force && this.mailDomainRuntimeFetchPromise) {
+                this.mailDomainRuntimeFetchQueued = true;
+                return this.mailDomainRuntimeFetchPromise;
+            }
+            const request = (async () => {
+                try {
+                    const res = await this.authFetch('/api/config/mail_domain_runtime_stats');
+                    const data = await res.json();
+                    if (data.status === 'success' && Array.isArray(data.items)) {
+                        this.mailDomainRuntimeStats = data.items;
+                        this.mailDomainRuntimeStatsError = '';
+                        this.mailDomainRuntimeLastFetchAt = Date.now();
+                    } else {
+                        this.mailDomainRuntimeStatsError = data.message || '域名运行时状态获取失败';
+                        if (!silent) {
+                            this.showToast(this.mailDomainRuntimeStatsError, 'error');
+                        }
+                    }
+                } catch (e) {
+                    this.mailDomainRuntimeStatsError = '域名运行时状态获取失败，请检查后端接口或网络连接';
                     if (!silent) {
                         this.showToast(this.mailDomainRuntimeStatsError, 'error');
                     }
+                } finally {
+                    this.mailDomainRuntimeFetchPromise = null;
+                    if (this.mailDomainRuntimeFetchQueued) {
+                        this.mailDomainRuntimeFetchQueued = false;
+                        this.fetchMailDomainRuntimeStats({ silent: true, force: true });
+                    }
                 }
-            } catch (e) {
-                this.mailDomainRuntimeStatsError = '域名运行时状态获取失败，请检查后端接口或网络连接';
-                if (!silent) {
-                    this.showToast(this.mailDomainRuntimeStatsError, 'error');
-                }
-            }
+            })();
+            this.mailDomainRuntimeFetchPromise = request;
+            return request;
         },
         toggleMailDomainRuntimePanel() {
             this.mailDomainRuntimePanelCollapsed = !this.mailDomainRuntimePanelCollapsed;
             localStorage.setItem('mail_domain_runtime_panel_collapsed', this.mailDomainRuntimePanelCollapsed ? 'true' : 'false');
+            if (!this.mailDomainRuntimePanelCollapsed && this.config?.enable_mail_domain_runtime_control) {
+                this.fetchMailDomainRuntimeStats({ silent: true, force: true });
+            }
         },
         isMailDomainRuntimePristine(item) {
             if (!item || typeof item !== 'object') return false;
@@ -1174,8 +1717,8 @@ createApp({
                 if (data.status === 'success') {
                     this.mailDomainRuntimeStatsError = '';
                     this.showToast(data.message || '已清除全部域名冷却', 'success');
-                    await this.fetchMailDomainRuntimeStats({ silent: true });
-                    this.pollStats();
+                    await this.fetchMailDomainRuntimeStats({ silent: true, force: true });
+                    this.queuePollStats();
                 } else {
                     this.showToast(data.message || '清除全部域名冷却失败', 'error');
                 }
@@ -1191,14 +1734,14 @@ createApp({
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    this.showToast(data.message || '已清空域名计数', 'success');
-                    await this.fetchMailDomainRuntimeStats({ silent: true });
-                    this.pollStats();
+                    this.showToast(data.message || '已清除域名异常', 'success');
+                    await this.fetchMailDomainRuntimeStats({ silent: true, force: true });
+                    this.queuePollStats();
                 } else {
-                    this.showToast(data.message || '清空域名计数失败', 'error');
+                    this.showToast(data.message || '清除域名异常失败', 'error');
                 }
             } catch (e) {
-                this.showToast('清空域名计数失败，请检查网络连接', 'error');
+                this.showToast('清除域名异常失败，请检查网络连接', 'error');
             }
         },
         async clearMailDomainRuntimeRowCooldown(domain) {
@@ -1210,8 +1753,8 @@ createApp({
                 const data = await res.json();
                 if (data.status === 'success') {
                     this.showToast(data.message || '已清除域名冷却', 'success');
-                    await this.fetchMailDomainRuntimeStats({ silent: true });
-                    this.pollStats();
+                    await this.fetchMailDomainRuntimeStats({ silent: true, force: true });
+                    this.queuePollStats();
                 } else {
                     this.showToast(data.message || '清除域名冷却失败', 'error');
                 }
@@ -1248,6 +1791,17 @@ createApp({
                     this.config.local_microsoft.suffix_len_max = maxLen;
                 }
                 this.config.enable_mail_domain_runtime_control = normalizeBooleanLike(this.config.enable_mail_domain_runtime_control, false);
+                this.config.enable_mail_domain_grouping = normalizeBooleanLike(this.config.enable_mail_domain_grouping, false);
+                if (this.config.mail_domain_pinpoint_burst_mode === undefined) this.config.mail_domain_pinpoint_burst_mode = false;
+                this.config.mail_domain_pinpoint_burst_mode = normalizeBooleanLike(this.config.mail_domain_pinpoint_burst_mode, false);
+                if (this.config.mail_domain_prefer_low_failure_mode === undefined) this.config.mail_domain_prefer_low_failure_mode = false;
+                this.config.mail_domain_prefer_low_failure_mode = normalizeBooleanLike(this.config.mail_domain_prefer_low_failure_mode, false);
+                this.applyMailDomainModeConstraints();
+                const mailDomainGroupingError = this.validateMailDomainGrouping();
+                if (mailDomainGroupingError) {
+                    this.showToast(mailDomainGroupingError, 'warning');
+                    return;
+                }
                 if (!Array.isArray(this.config.mail_domain_failure_types)) {
                     this.config.mail_domain_failure_types = ['discarded_email'];
                 }
@@ -1275,6 +1829,9 @@ createApp({
                 )];
                 this.config.mail_domain_fail_threshold = Math.max(0, parseInt(this.config.mail_domain_fail_threshold, 10) || 0);
                 this.config.mail_domain_fail_cooldown_sec = Math.max(0, parseInt(this.config.mail_domain_fail_cooldown_sec, 10) || 0);
+                let clusterUploadTimeout = parseInt(this.config.cluster_upload_timeout_sec, 10);
+                if (Number.isNaN(clusterUploadTimeout)) clusterUploadTimeout = 15;
+                this.config.cluster_upload_timeout_sec = Math.max(15, Math.min(3600, clusterUploadTimeout));
                 this.config.warp_proxy_list = this.warpListStr.split('\n').map(s => s.trim()).filter(s => s);
                 if (!this.config.raw_proxy_pool || typeof this.config.raw_proxy_pool !== 'object' || Array.isArray(this.config.raw_proxy_pool)) {
                     this.config.raw_proxy_pool = { enable: false, proxy_list: [] };
@@ -1288,8 +1845,8 @@ createApp({
                 if(data.status === 'success') {
                     this.showToast(data.message, "success");
                     await this.fetchConfig();
-                    await this.fetchMailDomainRuntimeStats();
-                    this.pollStats();
+                    await this.fetchMailDomainRuntimeStats({ force: true });
+                    this.queuePollStats();
                 } else { this.showToast("保存失败：" + data.message, "error"); }
             } catch (e) { this.showToast("保存失败网络异常", "error"); }
         },
@@ -1301,8 +1858,14 @@ createApp({
             const statusMap = {
                 'all': '全部',
                 'unpushed': '未推送',
+                'pushed': '已推送',
+                'credential': '有凭证',
+                'image2api': 'Img凭证',
                 'active': '活跃',
-                'disabled': '已禁用'
+                'disabled': '已禁用',
+                'with_token': '完整凭证',
+                'reg_only': '半成品号',
+                'imgsub2api': 'ImgSub2API'
             };
             this.showToast(`已筛选: ${statusMap[status]}的本地账号`, 'info');
         },
@@ -1389,9 +1952,12 @@ createApp({
         switchTab(tabId) {
             if (!this.isLoggedIn) return;
             this.currentTab = tabId;
+            if (this.isMobileViewport()) {
+                this.toggleMobileNav(false);
+            }
             window.location.hash = tabId;
 			if (tabId === 'console') {
-				this.pollStats();
+				this.queuePollStats();
 			}
             if (tabId === 'accounts') {
                 this.fetchAccounts();
@@ -1400,7 +1966,7 @@ createApp({
             }
 			if (tabId === 'email') {
 				this.fetchConfig();
-                    this.fetchMailDomainRuntimeStats();
+                    this.fetchMailDomainRuntimeStats({ force: true });
 			}
 			if (tabId === 'cloud') {
 			    this.fetchCloudAccounts();
@@ -1418,6 +1984,8 @@ createApp({
             }
             if (tabId === 'concurrency') {
                 this.fetchMemoryPrediction();
+                this.fetchGitSyncStatus(false);
+                this.fetchCleanupStatus(false);
             }
             if (tabId === 'team_accounts') {
                 this.fetchTeamAccounts();
@@ -1625,7 +2193,20 @@ createApp({
                     if (this.config?.reg_mode === 'extension') {
                         this.showToast("📡 正在探测节点在线状态...", "info");
                         try {
-                            const localId = localStorage.getItem('local_worker_id') || 'Node-Pilot-01';
+                            const localId = localStorage.getItem('local_worker_id');
+                            if (!localId) {
+                                const now = new Date();
+            const timeStr = formatMainlandTime(now);
+                                this.showToast("🚫 启动失败：未检测到插件节点身份，请先刷新插件连接", "error");
+                                this.logs.push({
+                                    parsed: true,
+                                    time: timeStr,
+                                    level: '系统',
+                                    text: '🛑 未检测到有效插件节点身份，请确认插件已连接并刷新页面后重试。',
+                                    raw: `[${timeStr}] [系统] 🛑 未检测到有效插件节点身份，请确认插件已连接并刷新页面后重试。`
+                                });
+                                return;
+                            }
                             const checkRes = await this.authFetch(`/api/ext/check_node?worker_id=${localId}`);
                             const checkData = await checkRes.json();
                             if (!checkData.online) {
@@ -1673,8 +2254,8 @@ createApp({
                 if (data.status === 'success') {
                     this.isRunning = true;
                     this.currentTab = 'console';
-                    this.pollStats();
-                    await this.fetchMailDomainRuntimeStats();
+                    this.queuePollStats();
+                    await this.fetchMailDomainRuntimeStats({ force: true });
                     this.showToast(`启动成功`, "success");
                 } else { this.showToast(data.message, "error"); }
             } catch (e) { this.showToast("启动请求发送失败", "error"); }
@@ -1685,7 +2266,7 @@ createApp({
                 const data = await res.json();
                 this.showToast("任务已停止", "info");
                 this.isRunning = false;
-                await this.fetchMailDomainRuntimeStats();
+                await this.fetchMailDomainRuntimeStats({ force: true });
                 const now = new Date();
             const timeStr = formatMainlandTime(now); // 获取如 14:30:05 格式
                 this.logs.push({
@@ -1702,7 +2283,7 @@ createApp({
                         container.scrollTop = container.scrollHeight;
                     }
                 });
-                this.pollStats();
+                this.queuePollStats();
             } catch (e) {
                 this.showToast("停止请求发送失败", "error");
             }
@@ -2367,7 +2948,7 @@ createApp({
 
                 if(data.code === 200) {
                     this.showToast(data.message, 'success');
-                    this.pollStats();
+                    this.queuePollStats();
                 } else {
                     this.showToast(data.message || '启动测活失败', 'error');
                 }
@@ -2515,7 +3096,7 @@ createApp({
             if (isNaN(d.getTime())) return dateStr;
             return formatMainlandDateTime(d);
         },
-        async exportSub2Api() {
+async exportSub2Api() {
             if (this.selectedAccounts.length === 0) {
                 this.showToast('请先勾选账号', 'warning');
                 return;
@@ -2533,47 +3114,20 @@ createApp({
                     const accounts = res.data.accounts;
                     const timestamp = Math.floor(Date.now() / 1000);
 
-                    if (accounts.length > 1) {
-                        const zip = new JSZip();
+                    // 无论数量多少，直接将返回的数据(包含所有选中的accounts)作为一个JSON文件下载
+                    const content = JSON.stringify(res.data, null, 2);
+                    const blob = new Blob([content], { type: 'application/json' });
+                    const url = window.URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    // 文件名带上数量和时间戳
+                    link.download = `sub2api_批量导出_${accounts.length}个_${timestamp}.json`;
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    window.URL.revokeObjectURL(url);
 
-                        accounts.forEach((acc, index) => {
-                            const prefix = (acc.name || "user").split('@')[0];
-
-                            const singleAccountData = {
-                                exported_at: res.data.exported_at,
-                                proxies: res.data.proxies,
-                                accounts: [acc]
-                            };
-
-                            const filename = `sub2api_${prefix}_${timestamp + index}.json`;
-                            zip.file(filename, JSON.stringify(singleAccountData, null, 2));
-                        });
-
-                        const content = await zip.generateAsync({ type: "blob" });
-                        const url = window.URL.createObjectURL(content);
-                        const link = document.createElement('a');
-                        link.href = url;
-                        link.download = `Sub2Api_批量导出_${accounts.length}个_${timestamp}.zip`;
-                        document.body.appendChild(link);
-                        link.click();
-                        link.remove();
-                        window.URL.revokeObjectURL(url);
-
-                        this.showToast(`🎉 成功打包并下载 ${accounts.length} 个独立配置文件！`, 'success');
-                    } else {
-                        const content = JSON.stringify(res.data, null, 2);
-                        const blob = new Blob([content], { type: 'application/json' });
-                        const url = window.URL.createObjectURL(blob);
-                        const link = document.createElement('a');
-                        link.href = url;
-                        link.download = `sub2api_export_${timestamp}.json`;
-                        document.body.appendChild(link);
-                        link.click();
-                        link.remove();
-                        window.URL.revokeObjectURL(url);
-
-                        this.showToast(`成功导出 ${accounts.length} 个账号到单个文件`, 'success');
-                    }
+                    this.showToast(`🎉 成功导出 ${accounts.length} 个账号到单个 JSON 文件`, 'success');
 
                     this.selectedAccounts = [];
                 } else {
@@ -2581,7 +3135,8 @@ createApp({
                 }
             } catch (error) {
                 console.error('导出异常:', error);
-                this.showToast('导出异常，请检查 JSZip 是否加载', 'error');
+                // 已经不再使用 JSZip，修改一下错误提示
+                this.showToast('导出异常，请检查网络或刷新页面', 'error');
             }
         },
 
@@ -2601,49 +3156,50 @@ createApp({
 
         async fetchCloudAccounts() {
             if (this.cloudFilters.length === 0) {
+                this.rawCloudAccounts = [];
                 this.cloudAccounts = [];
                 this.cloudTotal = 0;
                 this.inventoryStats.cloud = {
                     total: 0, enabled: 0, cpa: 0, cpa_active: 0, cpa_disabled: 0, sub2api: 0, sub2api_active: 0, sub2api_disabled: 0, image2api: 0, image2api_active: 0, image2api_disabled: 0
                 };
+                this.cloudFetchState = { loading: false, currentType: '', completed: 0, total: 0, message: '未选择平台' };
                 return;
             }
-            const types = this.cloudFilters.join(',');
-            let url = `/api/cloud/accounts?types=${types}&status_filter=${this.cloudStatusFilter}&page=${this.cloudPage}&page_size=${this.cloudPageSize}`;
-
-            if (this.searchCloud) {
-                url += `&search=${encodeURIComponent(this.searchCloud)}`;
-            }
-
+            const typeQueue = [...this.cloudFilters];
+            this.cloudFetchState = {
+                loading: true,
+                currentType: typeQueue[0] || '',
+                completed: 0,
+                total: typeQueue.length,
+                message: '准备分批获取云端库存...'
+            };
             try {
-                const res = await this.authFetch(url);
-                const data = await res.json();
-
-                if(data.status === 'success') {
-                    this.cloudAccounts = (data.data || []).map(acc => ({
-                        ...acc,
-                        last_check: this.localCheckTimes[acc.id] || acc.last_check || '-',
-                        details: acc.account_type === 'image2api' ? (acc.details || {}) : (this.localCloudDetails[acc.id] || acc.details || {}),
-                        _loading: null
-                    }));
-                    this.cloudTotal = data.total || 0;
-                    this.selectedCloud = [];
-
-                    if (data.cloud_stats) {
-                        this.inventoryStats.cloud = data.cloud_stats;
+                const combined = [];
+                for (let index = 0; index < typeQueue.length; index += 1) {
+                    const type = typeQueue[index];
+                    this.cloudFetchState.currentType = type;
+                    this.cloudFetchState.message = `正在获取 ${type.toUpperCase()} 数据...`;
+                    const url = `/api/cloud/accounts?types=${type}&status_filter=all&page=1&page_size=2000`;
+                    const res = await this.authFetch(url);
+                    const data = await res.json();
+                    if (data.status !== 'success') {
+                        throw new Error(data.message || `${type} 拉取失败`);
                     }
-
-                    if (typeof this.fetchInventoryStats === 'function') {
-                        this.fetchInventoryStats();
-                    }
-                } else {
-                    this.showToast(data.message, "error");
-                    this.inventoryStats.cloud = {
-                        total: 0, enabled: 0, cpa: 0, cpa_active: 0, cpa_disabled: 0, sub2api: 0, sub2api_active: 0, sub2api_disabled: 0, image2api: 0, image2api_active: 0, image2api_disabled: 0
-                    };
-                    this.cloudAccounts = [];
-                    this.cloudTotal = 0;
+                    combined.push(...(data.data || []));
+                    this.cloudFetchState.completed = index + 1;
                 }
+                this.rawCloudAccounts = combined.map(acc => ({
+                    ...acc,
+                    last_check: this.localCheckTimes[acc.id] || acc.last_check || '-',
+                    details: acc.account_type === 'image2api' ? (acc.details || {}) : (this.localCloudDetails[acc.id] || acc.details || {}),
+                    _loading: null
+                }));
+                this.inventoryStats.cloud = this.computeCloudStats(this.rawCloudAccounts);
+                this.applyCloudAccountView();
+                if (typeof this.fetchInventoryStats === 'function') {
+                    this.fetchInventoryStats();
+                }
+                this.cloudFetchState.message = `已完成 ${typeQueue.length} 个平台的分批获取`;
             } catch (e) {
                 console.error(e);
                 if (this.isLoggedIn && e.message !== "Unauthorized") {
@@ -2651,10 +3207,54 @@ createApp({
                     this.inventoryStats.cloud = {
                         total: 0, enabled: 0, cpa: 0, cpa_active: 0, cpa_disabled: 0, sub2api: 0, sub2api_active: 0, sub2api_disabled: 0, image2api: 0, image2api_active: 0, image2api_disabled: 0
                     };
+                    this.rawCloudAccounts = [];
                     this.cloudAccounts = [];
                     this.cloudTotal = 0;
+                    this.cloudFetchState.message = '获取失败';
                 }
+            } finally {
+                this.cloudFetchState.loading = false;
             }
+        },
+        computeCloudStats(items) {
+            const rows = Array.isArray(items) ? items : [];
+            const isActive = (item) => item.status === 'active';
+            const isType = (item, type) => item.account_type === type;
+            return {
+                total: rows.length,
+                enabled: rows.filter(isActive).length,
+                cpa: rows.filter(item => isType(item, 'cpa')).length,
+                cpa_active: rows.filter(item => isType(item, 'cpa') && isActive(item)).length,
+                cpa_disabled: rows.filter(item => isType(item, 'cpa') && !isActive(item)).length,
+                sub2api: rows.filter(item => isType(item, 'sub2api')).length,
+                sub2api_active: rows.filter(item => isType(item, 'sub2api') && isActive(item)).length,
+                sub2api_disabled: rows.filter(item => isType(item, 'sub2api') && !isActive(item)).length,
+                image2api: rows.filter(item => isType(item, 'image2api')).length,
+                image2api_active: rows.filter(item => isType(item, 'image2api') && isActive(item)).length,
+                image2api_disabled: rows.filter(item => isType(item, 'image2api') && !isActive(item)).length
+            };
+        },
+        applyCloudAccountView() {
+            let rows = [...this.rawCloudAccounts];
+            if (this.cloudStatusFilter !== 'all') {
+                rows = rows.filter(item => item.status === this.cloudStatusFilter);
+            }
+            if (this.searchCloud) {
+                const term = this.searchCloud.toLowerCase();
+                rows = rows.filter(item => {
+                    const credential = String(item.credential || '').toLowerCase();
+                    const id = String(item.id || '').toLowerCase();
+                    return credential.includes(term) || id.includes(term);
+                });
+            }
+            this.cloudTotal = rows.length;
+            const totalPages = Math.max(1, Math.ceil(this.cloudTotal / this.cloudPageSize) || 1);
+            if (this.cloudPage > totalPages) {
+                this.cloudPage = totalPages;
+            }
+            const startIdx = (this.cloudPage - 1) * this.cloudPageSize;
+            this.cloudAccounts = rows.slice(startIdx, startIdx + this.cloudPageSize);
+            this.selectedCloud = [];
         },
 
         async singleCloudAction(acc, action) {
@@ -2705,7 +3305,7 @@ createApp({
         },
         filterByCard(platformType, status) {
             if (platformType === 'all') {
-                this.cloudFilters = ['sub2api', 'cpa'];
+                this.cloudFilters = ['sub2api', 'cpa', 'image2api'];
             } else if (platformType === 'cpa') {
                 this.cloudFilters = ['cpa'];
             } else if (platformType === 'sub2api') {
@@ -2782,12 +3382,16 @@ createApp({
                 return;
             }
             this.cloudPage = newPage;
-            this.fetchCloudAccounts();
+            this.applyCloudAccountView();
         },
         changeCloudPageSize() {
             this.cloudPage = 1;
             this.selectedCloud = [];
-            this.fetchCloudAccounts();
+            this.applyCloudAccountView();
+        },
+        onCloudSearchInput() {
+            this.cloudPage = 1;
+            this.applyCloudAccountView();
         },
         async remoteControlNode(nodeName, action) {
             try {
@@ -2798,12 +3402,125 @@ createApp({
                 const data = await res.json();
                 if (data.status === 'success') {
                     this.showToast(`✅ 指令 [${action}] 已成功发送至节点: ${nodeName}`, 'success');
+                    if (action === 'export_accounts') {
+                        setTimeout(() => this.fetchClusterSyncTasks({ silent: true }), 1000);
+                    }
                 } else {
                     this.showToast(data.message, 'warning');
                 }
             } catch (e) {
                 this.showToast('控制请求异常', 'error');
             }
+        },
+        async fetchClusterSyncTasks(options = {}) {
+            const { silent = false } = options;
+            if (!silent) {
+                this.clusterSyncTasksLoading = true;
+            }
+            try {
+                const res = await this.authFetch('/api/cluster/sync_tasks?limit=20');
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.clusterSyncTasks = Array.isArray(data.tasks) ? data.tasks : [];
+                } else if (!silent) {
+                    this.showToast(data.message || '同步任务列表获取失败', 'warning');
+                }
+            } catch (e) {
+                if (!silent) {
+                    this.showToast('同步任务列表获取失败', 'error');
+                }
+            } finally {
+                if (!silent) {
+                    this.clusterSyncTasksLoading = false;
+                }
+            }
+        },
+        async clearTerminalClusterSyncTasks() {
+            const confirmed = await this.customConfirm('确定清理所有已完成、已取消和已中断的同步任务吗？此操作不可恢复。');
+            if (!confirmed) return;
+            try {
+                const res = await this.authFetch('/api/cluster/sync_tasks/clear_terminal', {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast(data.message || '终态同步任务已清理', 'success');
+                    await this.fetchClusterSyncTasks();
+                } else {
+                    this.showToast(data.message || '终态同步任务清理失败', 'warning');
+                }
+            } catch (e) {
+                this.showToast('终态同步任务清理失败', 'error');
+            }
+        },
+        async retryClusterSyncTask(taskId) {
+            if (!taskId) return;
+            try {
+                const res = await this.authFetch(`/api/cluster/sync_tasks/${encodeURIComponent(taskId)}/retry`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast(data.message || `同步任务 ${taskId} 已重新排队`, 'success');
+                    await this.fetchClusterSyncTasks({ silent: true });
+                } else {
+                    this.showToast(data.message || '同步任务重试失败', 'warning');
+                }
+            } catch (e) {
+                this.showToast('同步任务重试失败', 'error');
+            }
+        },
+        async cancelClusterSyncTask(taskId) {
+            if (!taskId) return;
+            try {
+                const res = await this.authFetch(`/api/cluster/sync_tasks/${encodeURIComponent(taskId)}/cancel`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast(data.message || `同步任务 ${taskId} 已取消`, 'success');
+                    await this.fetchClusterSyncTasks({ silent: true });
+                } else {
+                    this.showToast(data.message || '同步任务取消失败', 'warning');
+                }
+            } catch (e) {
+                this.showToast('同步任务取消失败', 'error');
+            }
+        },
+        formatClusterSyncStatus(status) {
+            const statusMap = {
+                pending: '排队中',
+                running: '导入中',
+                success: '已完成',
+                partial_success: '部分成功',
+                failed: '失败',
+                retry_wait: '待重试',
+                cancel_requested: '取消中',
+                cancelled: '已取消'
+            };
+            return statusMap[String(status || '').trim()] || (status || '未知');
+        },
+        clusterSyncStatusClass(status) {
+            const normalized = String(status || '').trim();
+            if (normalized === 'success') return 'bg-emerald-50 text-emerald-600 border-emerald-200';
+            if (normalized === 'partial_success') return 'bg-amber-50 text-amber-600 border-amber-200';
+            if (normalized === 'failed') return 'bg-rose-50 text-rose-600 border-rose-200';
+            if (normalized === 'retry_wait') return 'bg-orange-50 text-orange-600 border-orange-200';
+            if (normalized === 'cancel_requested') return 'bg-slate-100 text-slate-600 border-slate-300';
+            if (normalized === 'cancelled') return 'bg-slate-100 text-slate-500 border-slate-200';
+            if (normalized === 'running') return 'bg-sky-50 text-sky-600 border-sky-200';
+            return 'bg-slate-100 text-slate-600 border-slate-200';
+        },
+        formatClusterSyncTime(value) {
+            if (!value) return '-';
+            const normalized = String(value).replace(' ', 'T');
+            const date = new Date(normalized);
+            if (Number.isNaN(date.getTime())) return value;
+            return this.formatMainlandDateTime(date);
+        },
+        formatClusterSyncError(errorMessage) {
+            const text = String(errorMessage || '').trim();
+            return text || '-';
         },
         formatDuration(seconds) {
             if (!seconds || seconds < 0) return "0s";
@@ -2851,6 +3568,7 @@ createApp({
                 const res = JSON.parse(event.data);
                 if (res.status === 'success') {
                     this.clusterNodes = res.nodes;
+                    this.fetchClusterSyncTasks({ silent: true });
                 }
             };
 
@@ -3297,12 +4015,74 @@ createApp({
                 if (d.status === 'success') {
                     this.clashPool.instances = d.data.instances;
                     this.clashPool.groups = d.data.groups;
+                    this.clashPool.subscriptions = (d.data.subscriptions?.items || []).map((item) => ({
+                        ...item,
+                        raw_url: item.url,
+                        url: this.resolveClashSubscriptionUrl(item.url)
+                    }));
+                    this.clashPool.mode = d.data.mode || '';
+                    this.clashPool.message = d.data.message || '';
                     if (this.clashPool.instances.length > 0 && !this.clashPool.isDeploying) {
                         this.clashPool.count = this.clashPool.instances.length;
+                    }
+                    const currentSub = this.clashPool.subscriptions.find(item => item.selected) || this.clashPool.subscriptions[0] || null;
+                    this.clashPool.subUrl = currentSub?.url || '';
+                    const activeExists = this.clashPool.groups.some(group => group.name === this.clashPool.activeGroupName);
+                    if (this.clashPool.groups.length > 0) {
+                        if (!activeExists) {
+                            this.primeActiveClashGroup(this.clashPool.groups[0]);
+                        }
+                    } else {
+                        this.clashPool.activeGroupName = '';
+                    }
+                    if (!activeExists) {
+                        this.clashPool.view = 'groups';
+                        this.clashPool.delayResults = {};
                     }
                 }
             } catch (e) {}
             this.clashPool.loading = false;
+        },
+        primeActiveClashGroup(group) {
+            if (!group || !group.name) return;
+            this.clashPool.activeGroupName = group.name;
+            this.fillProxyGroup(group.name);
+            if (!this.clashPool.nodeSelections[group.name]) {
+                this.clashPool.nodeSelections[group.name] = group.current || (Array.isArray(group.nodes) ? group.nodes[0] : '') || '';
+            }
+        },
+        setActiveClashGroup(group) {
+            this.primeActiveClashGroup(group);
+            this.clashPool.view = 'nodes';
+        },
+        backToClashGroups() {
+            this.clashPool.view = 'groups';
+        },
+        getClashDelayRows(group) {
+            if (!group || !Array.isArray(group.nodes)) return [];
+            const resultMap = this.clashPool.delayResults[group.name]?.results || {};
+            const healthyNodes = Array.isArray(group.healthy_nodes) ? group.healthy_nodes.filter(Boolean) : [];
+            const sourceNodes = healthyNodes.length ? healthyNodes : group.nodes;
+            const rows = sourceNodes.map((nodeName) => ({
+                nodeName,
+                result: resultMap[nodeName] || null,
+                isCurrent: group.current === nodeName,
+                isSelected: this.clashPool.nodeSelections[group.name] === nodeName
+            }));
+            rows.sort((a, b) => {
+                const aOk = a.result?.status === 'ok';
+                const bOk = b.result?.status === 'ok';
+                if (aOk && bOk) return (a.result.delay || Number.MAX_SAFE_INTEGER) - (b.result.delay || Number.MAX_SAFE_INTEGER);
+                if (aOk) return -1;
+                if (bOk) return 1;
+                if (a.isCurrent) return -1;
+                if (b.isCurrent) return 1;
+                return a.nodeName.localeCompare(b.nodeName, 'zh-CN');
+            });
+            return rows;
+        },
+        getClashHealthyCount(group) {
+            return Array.isArray(group?.healthy_nodes) ? group.healthy_nodes.filter(Boolean).length : 0;
         },
         async handleClashDeploy() {
             this.showToast('正在调整实例规模...', 'info');
@@ -3349,6 +4129,175 @@ createApp({
             if (this.config && this.config.clash_proxy_pool) {
                 this.config.clash_proxy_pool.group_name = name;
                 this.showToast(`已自动填入策略组：${name}`, 'success');
+            }
+        },
+        async handleClashRuntime(action) {
+            this.clashPool.runtimeActionLoading = true;
+            try {
+                const res = await this.authFetch('/api/clash/runtime', {
+                    method: 'POST',
+                    body: JSON.stringify({ action })
+                });
+                const data = await res.json();
+                this.showToast(data.message || 'Clash 运行控制已执行', data.status);
+                if (data.status === 'success') {
+                    setTimeout(() => this.fetchClashPool(), 1200);
+                }
+            } catch (e) {
+                this.showToast('Clash 运行控制请求失败', 'error');
+            } finally {
+                this.clashPool.runtimeActionLoading = false;
+            }
+        },
+        async addClashSubscription() {
+            if (!this.clashPool.newSubscriptionUrl) {
+                this.showToast('请输入订阅链接', 'warning');
+                return;
+            }
+            this.clashPool.subscriptionActionLoading = true;
+            try {
+                const normalizedUrl = this.resolveClashSubscriptionUrl(this.clashPool.newSubscriptionUrl);
+                const res = await this.authFetch('/api/clash/subscriptions/add', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        name: this.clashPool.newSubscriptionName,
+                        url: normalizedUrl,
+                        make_selected: this.clashPool.makeSelectedSubscription
+                    })
+                });
+                const data = await res.json();
+                this.showToast(data.message || '订阅已保存', data.status);
+                if (data.status === 'success') {
+                    this.clashPool.newSubscriptionName = '';
+                    this.clashPool.newSubscriptionUrl = '';
+                    await this.fetchClashPool();
+                }
+            } catch (e) {
+                this.showToast('保存订阅失败', 'error');
+            } finally {
+                this.clashPool.subscriptionActionLoading = false;
+            }
+        },
+        async selectClashSubscription(subscriptionId) {
+            this.clashPool.subscriptionActionLoading = true;
+            try {
+                this.clashPool.activeGroupName = '';
+                this.clashPool.view = 'groups';
+                this.clashPool.delayResults = {};
+                const subscription = this.clashPool.subscriptions.find(item => item.id === subscriptionId);
+                const res = await this.authFetch('/api/clash/subscriptions/select', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        subscription_id: subscriptionId,
+                        target: this.clashPool.target,
+                        resolved_url: subscription?.url || ''
+                    })
+                });
+                const data = await res.json();
+                const label = this.formatClashSubscriptionLabel(subscription);
+                this.showToast(
+                    data.status === 'success'
+                        ? `已切换订阅：${label}`
+                        : (data.message || `切换订阅失败：${label}`),
+                    data.status
+                );
+                if (data.status === 'success') {
+                    await this.fetchClashPool();
+                }
+            } catch (e) {
+                this.showToast('切换订阅失败', 'error');
+            } finally {
+                this.clashPool.subscriptionActionLoading = false;
+            }
+        },
+        async deleteClashSubscription(subscription) {
+            const confirmed = await this.customConfirm(`确定删除订阅 [${subscription?.name || subscription?.id || '未命名'}] 吗？`);
+            if (!confirmed) return;
+            this.clashPool.subscriptionActionLoading = true;
+            try {
+                const res = await this.authFetch('/api/clash/subscriptions/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ subscription_id: subscription.id })
+                });
+                const data = await res.json();
+                this.showToast(data.message || '订阅已删除', data.status);
+                if (data.status === 'success') {
+                    await this.fetchClashPool();
+                }
+            } catch (e) {
+                this.showToast('删除订阅失败', 'error');
+            } finally {
+                this.clashPool.subscriptionActionLoading = false;
+            }
+        },
+        async testClashGroup(groupName) {
+            if (!groupName) return;
+            this.clashPool.delayLoading = true;
+            try {
+                const res = await this.authFetch('/api/clash/delay', {
+                    method: 'POST',
+                    body: JSON.stringify({ group_name: groupName, target: this.clashPool.target })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.clashPool.delayResults[groupName] = data.data;
+                    const group = this.clashPool.groups.find(item => item.name === groupName);
+                    if (group && Array.isArray(data.data?.healthy_nodes)) {
+                        group.healthy_nodes = data.data.healthy_nodes;
+                    }
+                    this.showToast(data.message || '延迟测试完成', 'success');
+                } else {
+                    this.showToast(data.message || '延迟测试失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('延迟测试请求失败', 'error');
+            } finally {
+                this.clashPool.delayLoading = false;
+            }
+        },
+        async clearClashHealthyNodes(groupName) {
+            if (!groupName) return;
+            const confirmed = await this.customConfirm(`确定清空策略组 [${groupName}] 的有效节点池吗？清空后会重新显示全部节点。`);
+            if (!confirmed) return;
+            this.clashPool.delayLoading = true;
+            try {
+                const res = await this.authFetch('/api/clash/tested_nodes/clear', {
+                    method: 'POST',
+                    body: JSON.stringify({ group_name: groupName })
+                });
+                const data = await res.json();
+                this.showToast(data.message || '有效节点池已清空', data.status);
+                if (data.status === 'success') {
+                    const group = this.clashPool.groups.find(item => item.name === groupName);
+                    if (group) group.healthy_nodes = [];
+                    if (this.clashPool.delayResults[groupName]) {
+                        this.clashPool.delayResults[groupName].healthy_nodes = [];
+                    }
+                }
+            } catch (e) {
+                this.showToast('清空有效节点池失败', 'error');
+            } finally {
+                this.clashPool.delayLoading = false;
+            }
+        },
+        async switchClashGroupNode(groupName) {
+            const proxyName = this.clashPool.nodeSelections[groupName];
+            if (!groupName || !proxyName) {
+                this.showToast('请先选择策略组和目标节点', 'warning');
+                return;
+            }
+            try {
+                const res = await this.authFetch('/api/clash/switch', {
+                    method: 'POST',
+                    body: JSON.stringify({ group_name: groupName, proxy_name: proxyName, target: this.clashPool.target })
+                });
+                const data = await res.json();
+                this.showToast(data.message || '节点已切换', data.status);
+                if (data.status === 'success') {
+                    await this.fetchClashPool();
+                }
+            } catch (e) {
+                this.showToast('切换节点失败', 'error');
             }
         },
         syncClusterToPool() {
@@ -3740,6 +4689,25 @@ createApp({
                 this.showToast('清空异常', 'error');
             }
         },
+        async handleOverspeedToggle(event) {
+            const isTurningOn = event.target.checked;
+            if (isTurningOn) {
+                const hasCookie = this.teamAccounts && this.teamAccounts.some(team => team.cookies && team.cookies.trim() !== '');
+
+                if (!hasCookie) {
+                    this.showToast('⛔ 开启失败：当前账号库中未检测到完整的 Cookie 数据！', 'error');
+                    this.showToast('请先按 access_token----cookies 格式导入数据。', 'warning');
+                    event.target.checked = false;
+                    this.config.team_mode.overspeed = false;
+                    return;
+                }
+                this.config.team_mode.enable = true;
+            }
+            this.config.team_mode.overspeed = isTurningOn;
+            await this.saveConfig();
+            this.showToast(`🏎️ 超速妙模式已${isTurningOn ? '开启' : '关闭'}`, 'success');
+            this.showToast(`超速妙模式最大4线程，线程请不要设置过高，正常账号请不要开启该功能`, 'success');
+        },
         async uploadLicenseFile() {
             const fileInput = document.getElementById('licenseFileInput');
             if (!fileInput || !fileInput.files.length) {
@@ -3929,6 +4897,36 @@ createApp({
                     this.currentTab = 'email';
                 } else this.showToast(data.message, 'error');
             } catch (e) { this.showToast('请求异常', 'error'); } finally { this.cfTools.isEnablingEmail = false; }
+        },
+        async handleCFDeleteHosting() {
+            const targetDomains = String(this.cfTools.deleteDomains || '').trim();
+            if (!targetDomains) return this.showToast('请先填写需要删除的 CF 托管域名！', 'warning');
+            if (!this.config.cf_api_email || !this.config.cf_api_key) return this.showToast('请填写 CF 账号邮箱和 API Key！', 'warning');
+
+            const confirmed = await this.customConfirm(`⚠️ 危险操作：\n\n即将删除你在下方填写的 CF 托管域名及其 DNS / 邮件路由配置，确定继续吗？`);
+            if (!confirmed) return;
+
+            this.cfTools.isDeletingHosting = true;
+            this.showToast('正在批量删除 CF 托管域名...', 'info');
+            this.currentTab = 'console';
+            try {
+                const res = await this.authFetch('/api/cloudflare/delete_zones', {
+                    method: 'POST',
+                    body: JSON.stringify({ domains: targetDomains, api_email: this.config.cf_api_email, api_key: this.config.cf_api_key })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.cfTools.results = data.data || [];
+                    this.showToast('✅ 托管域名删除完成', 'success');
+                    this.currentTab = 'email';
+                } else {
+                    this.showToast(data.message || '删除失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('请求异常', 'error');
+            } finally {
+                this.cfTools.isDeletingHosting = false;
+            }
         },
         async handleCFDeployWorker() {
             if (!this.config.cf_api_email || !this.config.cf_api_key) return this.showToast('请填写 CF 凭据！', 'warning');
