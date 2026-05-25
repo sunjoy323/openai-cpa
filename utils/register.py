@@ -1470,7 +1470,13 @@ def retry_manual_review_login(
     return result
 
 
-def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
+def run(
+    proxy: Optional[str],
+    run_ctx: dict = None,
+    assigned_domain: Optional[str] = None,
+    batch_id: Optional[int] = None,
+    worker_index: Optional[int] = None,
+) -> tuple:
     """完整注册流程"""
     processed_mails: set = set()
     proxy = cfg.format_docker_url(proxy)
@@ -1501,7 +1507,12 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
             print(f"[{cfg.ts()}] [ERROR] 代理网络检查失败: {e}")
             return None, None
 
-    email, email_jwt = get_email_and_token(proxies)
+    email, email_jwt = get_email_and_token(
+        proxies,
+        assigned_domain=assigned_domain,
+        batch_id=batch_id,
+        worker_index=worker_index,
+    )
     if not email:
         return None, None
 

@@ -55,11 +55,17 @@ def _load_register_backend():
     return "legacy", legacy_run, legacy_refresh
 
 
-def run(proxy, run_ctx=None):
+def run(proxy, run_ctx=None, assigned_domain=None, batch_id=None, worker_index=None):
     backend, run_func, _ = _load_register_backend()
     backend_label = "上游 auth_pipeline" if backend == "auth_pipeline" else "本地 legacy"
     print(f"[{ts()}] [INFO] 当前注册后端: {backend_label}")
-    return run_func(proxy, run_ctx=run_ctx)
+    return run_func(
+        proxy,
+        run_ctx=run_ctx,
+        assigned_domain=assigned_domain,
+        batch_id=batch_id,
+        worker_index=worker_index,
+    )
 
 from utils.proxy_manager import smart_switch_node
 from utils.integrations.sub2api_client import Sub2APIClient
