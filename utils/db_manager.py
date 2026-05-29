@@ -530,6 +530,52 @@ def get_manual_review_accounts_page(page: int = 1, page_size: int = 50) -> dict:
         return {"total": 0, "data": []}
 
 
+def get_image_accounts_page(page: int = 1, page_size: int = 50, search: str = None) -> dict:
+    try:
+        with get_db_conn() as conn:
+            c = get_cursor(conn)
+            conditions = ["token_data LIKE '%\"image2api\"%'", "is_active = 1"]
+            params = []
+
+            if search:
+                conditions.append("(email LIKE ? OR password LIKE ?)")
+                search_term = f"%{search}%"
+                params.extend([search_term, search_term])
+
+            where_clause = " WHERE " + " AND ".join(conditions)
+
+            count_sql = f"SELECT COUNT(1) FROM accounts{where_clause}"
+            if params:
+                execute_sql(c, count_sql, tuple(params))
+            else:
+                execute_sql(c, count_sql)
+            total = c.fetchone()[0]
+
+            offset = (page - 1) * page_size
+            data_sql = f"SELECT email, password, created_at, token_data, is_active, push_platform, push_time FROM accounts{where_clause} ORDER BY id DESC LIMIT ? OFFSET ?"
+
+            data_params = tuple(params + [page_size, offset])
+            execute_sql(c, data_sql, data_params)
+            rows = c.fetchall()
+
+            data = [
+                {
+                    "email": r[0],
+                    "password": r[1],
+                    "created_at": r[2],
+                    "status": "image2api",
+                    "is_active": r[4] if r[4] is not None else 1,
+                    "push_platform": r[5],
+                    "push_time": r[6]
+                } for r in rows
+            ]
+            return {"total": total, "data": data}
+    except Exception as e:
+        print(f"[{cfg.ts()}] [ERROR] 获取 半成品 账号库失败: {e}")
+        return {"total": 0, "data": []}
+
+
+
 def set_sys_kv(key: str, value: Any):
     try:
         val_str = json.dumps(value, ensure_ascii=False)

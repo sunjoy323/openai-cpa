@@ -328,6 +328,7 @@ createApp({
                     { id: 'team_accounts', name: 'Team 账号库', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>' },
                     { id: 'accounts', name: '账号库存', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>' },
                     { id: 'manual_review_accounts', name: '人工复核', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7 4h10a2 2 0 012 2v14l-7-3-7 3V6a2 2 0 012-2z"></path></svg>' },
+                    { id: 'image_accounts', name: '半成品库存', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>' },
                     { id: 'cloud', name: '云端库存', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h11a5 5 0 00-.1-9.995A5.002 5.002 0 1010.5 6H9.75a4 4 0 00-6.75 9z"></path></svg>' },
                     { id: 'sms', name: '手机接码', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>' },
                     { id: 'proxy', name: '网络代理', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"></path></svg>' },
@@ -582,6 +583,14 @@ createApp({
                 isDeletingHosting: false
             },
             isUpdatingSystem: false,
+            imageAccounts: [],
+            selectedImageAccounts: [],
+            searchImageAccounts: '',
+            imagePage: 1,
+            imagePageSize: 10,
+            totalImageAccounts: 0,
+            isUpgradingOAuthAll: false,
+            isUpgradingSelected: false,
         };
     },
     watch: {
@@ -1199,14 +1208,24 @@ createApp({
             }
             this.initSSE();
             this.fetchAccounts();
-            this.fetchCloudAccounts();
-            this.fetchTeamAccounts();
-            this.fetchMailboxes();
+            if (this.currentTab === 'cloud') {
+			    this.fetchCloudAccounts();
+			}
+            if (this.currentTab === 'mailboxes') {
+			    this.fetchMailboxes();
+			}
+            if (this.currentTab === 'team_accounts') {
+                this.fetchTeamAccounts();
+            }
             this.startStatsPolling();
             this.checkUpdate();
             this.fetchInventoryStats();
+
             if (this.config && this.config.reg_mode === 'extension') {
                 this.listenToExtension();
+            }
+            if (this.currentTab === 'image_accounts') {
+                this.fetchImageAccounts();
             }
             if (this.currentTab === 'cluster') {
                 this.fetchClusterSyncTasks();
@@ -1989,6 +2008,9 @@ createApp({
             }
             if (tabId === 'team_accounts') {
                 this.fetchTeamAccounts();
+            }
+            if (tabId === 'image_accounts') {
+                this.fetchImageAccounts();
             }
         },
         async exportSelectedAccounts() {
@@ -4985,5 +5007,157 @@ async exportSub2Api() {
                 } else this.showToast(data.message, 'error');
             } catch (e) { this.showToast('请求异常', 'error'); } finally { this.cfTools.isSettingCatchAll = false; }
         },
+        async fetchImageAccounts(isManual = false) {
+            if (isManual) this.imagePage = 1;
+            let url = `/api/image_accounts?page=${this.imagePage}&page_size=${this.imagePageSize}`;
+            if (this.searchImageAccounts) {
+                url += `&search=${encodeURIComponent(this.searchImageAccounts)}`;
+            }
+            try {
+                const res = await this.authFetch(url);
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.imageAccounts = data.data;
+                    this.totalImageAccounts = data.total;
+                    if (isManual) this.showToast("半成品库已刷新", "success");
+                }
+            } catch (e) {
+                this.showToast("半成品库加载失败", "error");
+            }
+        },
+        changeImagePage(newPage) {
+            this.imagePage = newPage;
+            this.fetchImageAccounts();
+        },
+        changeImagePageSize() {
+            this.imagePage = 1;
+            this.fetchImageAccounts();
+        },
+        toggleAllImageAccounts(e) {
+            if (e.target.checked) {
+                this.selectedImageAccounts = this.imageAccounts.map(a => a.email);
+            } else {
+                this.selectedImageAccounts = [];
+            }
+        },
+
+        async deleteSelectedImageAccounts() {
+            if (this.selectedImageAccounts.length === 0) return;
+            if (!confirm(`确定要删除选中的 ${this.selectedImageAccounts.length} 个半成品账号吗？`)) return;
+
+            try {
+                const res = await this.authFetch('/api/accounts/delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ emails: this.selectedImageAccounts })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast("删除成功", "success");
+                    this.selectedImageAccounts = [];
+                    this.fetchImageAccounts();
+                } else {
+                    this.showToast("删除失败", "error");
+                }
+            } catch (e) {
+                this.showToast("删除请求失败", "error");
+            }
+        },
+        exportImageAccounts() {
+            if (this.selectedImageAccounts.length === 0 && this.imageAccounts.length === 0) {
+                this.showToast("没有可导出的数据", "warning");
+                return;
+            }
+            const targetList = this.selectedImageAccounts.length > 0
+                ? this.imageAccounts.filter(a => this.selectedImageAccounts.includes(a.email))
+                : this.imageAccounts;
+
+            const text = targetList.map(a => `${a.email}----${a.password}`).join('\n');
+            const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `IMG_Accounts_${new Date().getTime()}.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
+            this.selectedImageAccounts = [];
+        },
+        async triggerOAuthUpgrade(emailsParam) {
+            this.currentTab = 'console';
+            try {
+                const res = await this.authFetch('/api/image_accounts/upgrade_oauth', {
+                    method: 'POST',
+                    body: JSON.stringify({ emails: emailsParam })
+                });
+                const data = await res.json();
+                if(data.status === 'success') {
+                    this.showToast(`任务已提交: 开始处理 ${data.count} 个账号`, "success");
+                    this.fetchImageAccounts();
+                } else {
+                    this.showToast(data.message || "请求失败", "error");
+                }
+            } catch(e) {
+                this.showToast("网络请求异常", "error");
+            }
+        },
+
+        async upgradeSingleImageAccount(acc) {
+            acc._upgrading = true;
+            await this.triggerOAuthUpgrade([acc.email]);
+            setTimeout(() => { acc._upgrading = false; this.fetchImageAccounts(); }, 2000);
+        },
+
+        async upgradeSelectedImageAccounts() {
+            if(this.selectedImageAccounts.length === 0) return;
+            this.isUpgradingSelected = true;
+            await this.triggerOAuthUpgrade(this.selectedImageAccounts);
+            this.isUpgradingSelected = false;
+            this.selectedImageAccounts = [];
+        },
+
+        async upgradeAllImageAccounts() {
+            if(!confirm("确定要对所有 IMG 账号进行 OAuth 凭证提取吗？该操作将占用所有并发线程。")) return;
+            this.isUpgradingOAuthAll = true;
+            await this.triggerOAuthUpgrade("ALL");
+            this.isUpgradingOAuthAll = false;
+        },
+        async bulkFetchSub2ApiUsage() {
+            const sub2apiIds = this.selectedCloud
+                .filter(val => val.endsWith('|sub2api'))
+                .map(val => val.split('|')[0]);
+
+            if (sub2apiIds.length === 0) {
+                this.showToast('当前选中的账号中没有 Sub2API 类型的账号，无法获取利用率。', 'warning');
+                return;
+            }
+
+            this.isCloudActionLoading = true;
+            try {
+                const response = await this.authFetch('/api/cloud/sub2api/usage/bulk', {
+                    method: 'POST',
+                    body: JSON.stringify({ account_ids: sub2apiIds })
+                });
+
+                const res = await response.json();
+
+                if (res.status === 'success') {
+                    const usageData = res.data;
+                    this.cloudAccounts.forEach(acc => {
+                        if (acc.account_type === 'sub2api' && usageData[acc.id]) {
+                            if (!acc.details) {
+                                acc.details = {};
+                            }
+                            acc.details.window_stats = usageData[acc.id];
+                        }
+                    });
+                    this.showToast(`成功刷新了 ${sub2apiIds.length} 个账号的额度利用率！`, 'success');
+                } else {
+                    this.showToast(res.message || '获取利用率失败', 'error');
+                }
+            } catch (e) {
+                this.showToast('网络错误: ' + e.message, 'error');
+            } finally {
+                this.isCloudActionLoading = false;
+            }
+        }
     }
 }).mount('#app');

@@ -60,7 +60,6 @@ def _build_account_item(token_data: Dict[str, Any], settings: Dict[str, Any], pr
             "expires_at": int(time.time() + 864000),
             "expires_in": 863999,
             "model_mapping": {
-                "gpt-5.4": "gpt-5.4",
                 "gpt-5.4-mini": "gpt-5.4-mini",
                 "gpt-5.5": "gpt-5.5",
             },
@@ -374,7 +373,6 @@ class Sub2APIClient:
             "credentials": {
                 "refresh_token": refresh_token,
                 "model_mapping": {
-                    "gpt-5.4": "gpt-5.4",
                     "gpt-5.4-mini": "gpt-5.4-mini",
                     "gpt-5.5": "gpt-5.5",
                 }

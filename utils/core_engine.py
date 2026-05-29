@@ -484,7 +484,7 @@ def process_account_worker(i: int, total: int, item: dict, args: Any) -> bool:
                 print(f"[{ts()}] [INFO] 测活: {mask_email(name)} 额度尚未恢复（{reason}），继续保持禁用状态。")
                 return False
             print(f"[{ts()}] [INFO] 测活: {mask_email(name)} 额度已恢复且有效，准备启用...")
-            ok = set_cpa_auth_file_status(cfg.CPA_API_URL, cfg.CPA_API_TOKEN, email, disabled=False)
+            ok = set_cpa_auth_file_status(cfg.CPA_API_URL, cfg.CPA_API_TOKEN, name, disabled=False)
             print(
                 f"[{ts()}] [{'SUCCESS' if ok else 'ERROR'}] 凭证 {mask_email(name)} "
                 f"{'已成功启用！' if ok else '启用失败。'}"
@@ -587,6 +587,25 @@ def process_account_worker(i: int, total: int, item: dict, args: Any) -> bool:
         print(f"[{ts()}] [WARNING] {mask_email(name)} 未找到有效数据，无法抢救")
 
     if not refresh_success:
+        if getattr(cfg, 'CPA_AUTO_RE_OAUTH', False):
+            print(f"[{ts()}] [INFO] 测活: {mask_email(name)} 尝试终极抢救 -> 自动重走 OAuth 提权流程")
+            full_info = db_manager.get_account_full_info(email)
+            if full_info:
+                password = full_info.get("password")
+                if not password:
+                    print(f"[{ts()}] [INFO] 测活: {mask_email(name)} 无密码记录，将尝试 [无密码 OTP] 通道提取")
+                    password = "Takeover_NoPassword"
+
+                raw_token = full_info.get("token_data", {})
+                acc_token = raw_token.get("access_token", "") if isinstance(raw_token, dict) else ""
+                device_id = raw_token.get("device_id", "") if isinstance(raw_token, dict) else ""
+                user_agent = raw_token.get("user_agent", "") if isinstance(raw_token, dict) else ""
+                res = run_oauth_only_and_sync(email, password, args.proxy, args, access_token=acc_token,
+                                              device_id=device_id, user_agent=user_agent)
+                if res == "success":
+                    return True
+            else:
+                print(f"[{ts()}] [WARNING] 测活: {mask_email(name)} 本地库彻底查无此号，放弃抢救")
         try:
             db_manager.update_account_status([email], 0)
         except Exception:
@@ -699,6 +718,13 @@ def handle_registration_result(result: Any, cpa_upload: bool = False, run_ctx: d
         with _stats_lock: run_stats["success"] += 1
         token_data    = json.loads(token_json_str)
         account_email = token_data.get("email", "unknown")
+        if run_ctx and run_ctx.get('device_id') and run_ctx.get('user_agent'):
+            token_data['device_id'] = run_ctx['device_id']
+            token_data['user_agent'] = run_ctx['user_agent']
+            token_json_str = json.dumps(token_data, ensure_ascii=False)
+
+
+
         domain_result = mail_service.record_domain_success(account_email if account_email and "@" in account_email else cur_dom)
         if domain_result:
             cooldown_text = _format_cooldown_time(domain_result.get("cooldown_until", 0.0))
@@ -952,6 +978,7 @@ def _handle_sub2api_dead_account(item: dict, client: Any, is_disabled: bool) -> 
     else:
         print(f"[{ts()}] [ERROR] 凭证 {mask_email(name)} 已死亡，当前已是禁用状态，根据配置保留不删除。")
 
+
 def process_sub2api_worker(i: int, total: int, item: dict, client: Any, args: Any) -> bool:
     """Sub2API 测活 Worker（使用 Sub2API /test SSE 接口）"""
     if hasattr(args, 'check_stop') and args.check_stop(): return False
@@ -985,70 +1012,72 @@ def process_sub2api_worker(i: int, total: int, item: dict, client: Any, args: An
         return False
 
     print(f"[{ts()}] [ERROR] Sub2API测活: {mask_email(name)} 测活失败 ({reason})")
-
+    refresh_success = False
     if not cfg.SUB2API_ENABLE_TOKEN_REVIVE:
+        print(f"[{ts()}] [ERROR] Token 普通复活已关闭。")
+    else:
+        refresh_token_val = item.get("credentials", {}).get("refresh_token")
+        if not refresh_token_val:
+            print(f"[{ts()}] [ERROR] {mask_email(name)} 无 refresh_token，跳过普通刷新")
+        else:
+            print(f"[{ts()}] [INFO] {mask_email(name)} 尝试刷新 Token...")
+            proxies = {"http": args.proxy, "https": args.proxy} if args.proxy else None
+            ok, new_tokens = refresh_oauth_token(refresh_token_val, proxies=proxies)
+
+            if not ok:
+                err_info = new_tokens.get('error', '未知') if isinstance(new_tokens, dict) else str(new_tokens)
+                print(f"[{ts()}] [ERROR] {mask_email(name)} Token 刷新失败: {err_info}")
+            else:
+                print(f"[{ts()}] [INFO] {mask_email(name)} Token 刷新成功，同步至 Sub2API...")
+                item.setdefault("credentials", {}).update(new_tokens)
+                up_ok, up_msg = client.update_account(account_id, item)
+
+                if not up_ok:
+                    print(f"[{ts()}] [ERROR] {mask_email(name)} 更新回 Sub2API 失败: {up_msg}")
+                else:
+                    print(f"[{ts()}] [INFO] {mask_email(name)} Token 已更新，二次验证中...")
+                    result2, reason2 = client.test_account(account_id)
+
+                    if result2 == "ok":
+                        print(f"[{ts()}] [SUCCESS] {mask_email(name)} 刷新复活成功，二次验证通过！")
+                        try:
+                            db_manager.update_account_status_by_truncated_name(name, 1)
+                        except Exception:
+                            pass
+                        refresh_success = True
+                    else:
+                        print(f"[{ts()}] [ERROR] {mask_email(name)} 二次验证失败 ({reason2})，账号确认已死")
+
+    if not refresh_success:
+        if getattr(cfg, 'SUB2API_AUTO_RE_OAUTH', False):
+            print(f"[{ts()}] [INFO] Sub2API测活: {mask_email(name)} 尝试终极抢救 -> 重走 OAuth 提权流程")
+            full_info = db_manager.get_account_full_info(name)
+
+            if full_info:
+                password = full_info.get("password")
+                if not password:
+                    print(f"[{ts()}] [INFO] Sub2API测活: {mask_email(name)} 无密码记录，将尝试 [无密码 OTP] 通道提取")
+                    password = "Takeover_NoPassword"
+
+                raw_token = full_info.get("token_data", {})
+                acc_token = raw_token.get("access_token", "") if isinstance(raw_token, dict) else ""
+                device_id = raw_token.get("device_id", "") if isinstance(raw_token, dict) else ""
+                user_agent = raw_token.get("user_agent", "") if isinstance(raw_token, dict) else ""
+
+                res = run_oauth_only_and_sync(name, password, args.proxy, args, access_token=acc_token,
+                                              device_id=device_id, user_agent=user_agent)
+                if res == "success":
+                    return True
+            else:
+                print(f"[{ts()}] [WARNING] Sub2API测活: {mask_email(name)} 本地库彻底查无此号，放弃抢救")
         try:
             db_manager.update_account_status_by_truncated_name(name, 0)
         except Exception:
             pass
-        print(f"[{ts()}] [ERROR] Token 复活已关闭，直接执行死亡处理")
         _handle_sub2api_dead_account(item, client, is_disabled=False)
         return False
 
-    refresh_token_val = item.get("credentials", {}).get("refresh_token")
-    if not refresh_token_val:
-        try:
-            db_manager.update_account_status_by_truncated_name(name, 0)
-        except Exception:
-            pass
-        print(f"[{ts()}] [ERROR] {mask_email(name)} 无 refresh_token，执行死亡处理")
-        _handle_sub2api_dead_account(item, client, is_disabled=False)
-        return False
-
-    print(f"[{ts()}] [INFO] {mask_email(name)} 尝试刷新 Token...")
-    proxies = {"http": args.proxy, "https": args.proxy} if args.proxy else None
-    ok, new_tokens = refresh_oauth_token(refresh_token_val, proxies=proxies)
-
-    if not ok:
-        err_info = new_tokens.get('error', '未知') if isinstance(new_tokens, dict) else str(new_tokens)
-        print(f"[{ts()}] [ERROR] {mask_email(name)} Token 刷新失败: {err_info}")
-        try:
-            db_manager.update_account_status_by_truncated_name(name, 0)
-        except Exception:
-            pass
-        _handle_sub2api_dead_account(item, client, is_disabled=False)
-        return False
-
-    print(f"[{ts()}] [INFO] {mask_email(name)} Token 刷新成功，同步至 Sub2API...")
-    item.setdefault("credentials", {}).update(new_tokens)
-    up_ok, up_msg = client.update_account(account_id, item)
-    if not up_ok:
-        print(f"[{ts()}] [ERROR] {mask_email(name)} 更新回 Sub2API 失败: {up_msg}")
-        _handle_sub2api_dead_account(item, client, is_disabled=False)
-        try:
-            db_manager.update_account_status_by_truncated_name(name, 0)
-        except Exception:
-            pass
-        return False
-
-    print(f"[{ts()}] [INFO] {mask_email(name)} Token 已更新，二次验证中...")
-    result2, reason2 = client.test_account(account_id)
-
-    if result2 == "ok":
-        print(f"[{ts()}] [SUCCESS] {mask_email(name)} 刷新复活成功，二次验证通过！")
-        try:
-            db_manager.update_account_status_by_truncated_name(name, 1)
-        except Exception:
-            pass
-        return True
-
-    print(f"[{ts()}] [ERROR] {mask_email(name)} 二次验证失败 ({reason2})，账号确认已死")
-    try:
-        db_manager.update_account_status_by_truncated_name(name, 0)
-    except Exception:
-        pass
-    _handle_sub2api_dead_account(item, client, is_disabled=False)
-    return False
+    return refresh_success
 
 def normal_main_loop(args, stop_event: threading.Event, executor=None):
     """常规量产模式（纯数据库保存）"""
@@ -1772,6 +1801,185 @@ async def sub2api_main_loop(args, async_stop_event: asyncio.Event, executor=None
             async_stop_event.set()
             break
 
+# 独立OAuth
+def handle_oauth_upgrade_result(email: str, result: Any, run_ctx: dict = None) -> str:
+
+    if getattr(cfg, 'GLOBAL_STOP', False):
+        return "stopped"
+    global run_stats
+    fail_reason = "提权失败/被风控"
+    if run_ctx:
+        if run_ctx.get('pwd_blocked'):
+            with _stats_lock: run_stats["pwd_blocked"] += 1
+        if run_ctx.get('phone_verify'):
+            with _stats_lock: run_stats["phone_verify"] += 1
+
+    if not result or not isinstance(result, (tuple, list)) or len(result) < 2:
+        with _stats_lock:
+            run_stats["failed"] += 1
+        try:
+            db_manager.update_account_status([email], 0)
+            print(f"[{ts()}] [WARNING] [提权] {mask_email(email)} 提权失败，已禁用")
+        except:
+            pass
+        return "failed"
+
+    token_json_str, password = result
+    if not token_json_str or token_json_str == "retry_403":
+        with _stats_lock:
+            run_stats["failed"] += 1
+        try:
+            db_manager.update_account_status([email], 0)
+            print(f"[{ts()}] [WARNING] [提权] {mask_email(email)} 提权失败，已标记为禁用")
+        except:
+            pass
+        return "failed"
+
+    with _stats_lock:
+        run_stats["success"] += 1
+
+    token_data = json.loads(token_json_str)
+    if "email" not in token_data:
+        token_data["email"] = email
+
+    if run_ctx and run_ctx.get('device_id') and run_ctx.get('user_agent'):
+        token_data['device_id'] = run_ctx['device_id']
+        token_data['user_agent'] = run_ctx['user_agent']
+
+    token_json_str = json.dumps(token_data, ensure_ascii=False)
+
+    try:
+        db_manager.update_account_token_only(email, token_json_str)
+        db_manager.update_account_status([email], 1)
+        print(f"[{ts()}] [SUCCESS] [提权] {mask_email(email)} 本地有效凭证已同步覆盖更新")
+    except Exception as e:
+        print(f"[{ts()}] [ERROR] 本地库更新失败: {e}")
+
+    cpa_upload = getattr(cfg, 'ENABLE_CPA_MODE', False)
+    sub2api_upload = getattr(cfg, 'ENABLE_SUB2API_MODE', False)
+
+    if cpa_upload:
+        current_status = token_data.get("status", "")
+        if current_status in ["image2api", "仅注册成功"]:
+            print(f"[{ts()}] [INFO] 当前账号状态为 [{current_status}]，跳过云端同步。")
+        else:
+            success, up_msg = upload_to_cpa_integrated(token_data, cfg.CPA_API_URL, cfg.CPA_API_TOKEN)
+            if success:
+                print(f"[{ts()}] [SUCCESS] [提权] 凭证 {mask_email(email)} 已同步至 CPA 云端！")
+            else:
+                print(f"[{ts()}] [ERROR] [提权] 云端上传失败: {up_msg}")
+
+    elif sub2api_upload:
+        client = Sub2APIClient(api_url=cfg.SUB2API_URL, api_key=cfg.SUB2API_KEY)
+        current_status = token_data.get("status", "")
+        if current_status in ["image2api", "仅注册成功"]:
+            print(f"[{ts()}] [INFO] 当前为 [{current_status}]，跳过云端补货推送。")
+        else:
+            if hasattr(client, "add_account"):
+                ok, msg = client.add_account(token_data)
+                if ok:
+                    print(f"[{ts()}] [SUCCESS] [提权] 凭证 {mask_email(email)} 已同步至 Sub2API")
+                else:
+                    print(f"[{ts()}] [ERROR] [提权] Sub2API 补货入库失败: {msg}")
+
+    try:
+        safe_pwd = str(password) if password else ""
+        orig_masked_email = mask_email(email, force_mask=True)
+        orig_masked_password = f"{safe_pwd[:2]}****{safe_pwd[-2:]}" if len(safe_pwd) > 4 else "****"
+
+        final_email = orig_masked_email if getattr(cfg, 'TG_BOT', {}).get("mask_email", False) else email
+        final_password = orig_masked_password if getattr(cfg, 'TG_BOT', {}).get("mask_password", False) else safe_pwd
+
+        template_str = getattr(cfg, 'TG_BOT', {}).get("template_success", "成功: {email} / {password} 时间: {time}")
+        beijing_tz = timezone(timedelta(hours=8))
+        current_time = datetime.now(beijing_tz).strftime("%Y-%m-%d %H:%M:%S")
+        success_text = template_str.format(email=final_email, password=final_password, time=current_time)
+        success_text = "🚀 [OAuth提权] " + success_text
+        send_tg_msg_sync(success_text)
+    except Exception as e:
+        pass
+
+    return "success"
+
+
+def run_oauth_only_and_sync(email, password, proxy, args, access_token="", device_id="", user_agent=""):
+    proxy = format_docker_url(proxy)
+    if not smart_switch_node(proxy):
+        print(f"[{ts()}] [WARNING] {proxy} 节点切换失败...")
+
+    run_ctx = {
+        'pwd_blocked': False,
+        'phone_verify': False
+    }
+
+    try:
+        from utils.auth_pipeline.register import run_oauth_only
+        result = run_oauth_only(email, password, proxy, run_ctx=run_ctx, access_token=access_token, device_id=device_id, user_agent=user_agent)
+    except Exception as e:
+        print(f"[{ts()}] [ERROR] 提权线程发生异常 {e}")
+        import traceback
+        traceback.print_exc()
+        result = None
+    return handle_oauth_upgrade_result(email, result, run_ctx=run_ctx)
+
+
+def oauth_upgrade_main_loop(args, target_accounts: list, stop_event: threading.Event, executor=None):
+    total_tasks = len(target_accounts)
+    print(f"\n[{ts()}] [系统] >>> 启动独立 OAuth 批量提取任务 <<<")
+    print(f"[{ts()}] [系统] 目标队列共计 {total_tasks} 个半成品账号待处理。")
+    global run_stats
+    with _stats_lock:
+        run_stats["success"] = 0
+        run_stats["failed"] = 0
+        run_stats["retries"] = 0
+        run_stats["pwd_blocked"] = 0
+        run_stats["phone_verify"] = 0
+        run_stats["start_time"] = time.time()
+        run_stats["target"] = total_tasks
+
+    max_workers = getattr(cfg, 'REG_THREADS', 4)
+
+    def _worker(acc):
+        if stop_event.is_set() or getattr(cfg, 'GLOBAL_STOP', False):
+            return "stopped"
+
+        acc_token = acc.get('access_token', '')
+        device_id = acc.get('device_id', '')
+        user_agent = acc.get('user_agent', '')
+        if cfg.is_raw_proxy_pool_enabled():
+            borrowed_generation, p = cfg.unpack_proxy_queue_item(cfg.PROXY_QUEUE.get())
+            try:
+                return run_oauth_only_and_sync(acc['email'], acc['password'], p, args, acc_token, device_id, user_agent)
+            finally:
+                if cfg.should_return_pooled_proxy(borrowed_generation):
+                    cfg.PROXY_QUEUE.put(cfg.make_proxy_queue_item(p, borrowed_generation))
+                    cfg.PROXY_QUEUE.task_done()
+        elif cfg._clash_enable and getattr(cfg, '_clash_pool_mode', False):
+            p = cfg.PROXY_QUEUE.get()
+            proxy_url = p[-1] if isinstance(p, tuple) else p
+            try:
+                return run_oauth_only_and_sync(acc['email'], acc['password'], proxy_url, args, acc_token, device_id, user_agent)
+            finally:
+                cfg.PROXY_QUEUE.put(p)
+                cfg.PROXY_QUEUE.task_done()
+        else:
+            return run_oauth_only_and_sync(acc['email'], acc['password'], args.proxy, args, acc_token, device_id, user_agent)
+
+    try:
+        if executor is not None:
+            futures = [executor.submit(_worker, acc) for acc in target_accounts]
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futures = [ex.submit(_worker, acc) for acc in target_accounts]
+
+        import concurrent.futures
+        for f in concurrent.futures.as_completed(futures):
+            pass
+
+    except Exception as e:
+        print(f"[{ts()}] [ERROR] 提权调度发生异常: {e}")
+
+    print(f"\n[{ts()}] [系统] <<< OAuth 批量提取任务结束 >>>")
 
 def main() -> None:
     reload_all_configs()
@@ -1991,6 +2199,39 @@ class RegEngine:
             elif clash_proxy_item is not None:
                 cfg.PROXY_QUEUE.put(clash_proxy_item)
                 cfg.PROXY_QUEUE.task_done()
+
+    def start_oauth_upgrade(self, args, target_accounts: list):
+        if self.is_running():
+            return False, "引擎当前正在运行其他任务，请先点击停止"
+
+        self._force_stopped = False
+        cfg.GLOBAL_STOP = False
+        cfg.POOL_EXHAUSTED = False
+        self.thread_stop_event = threading.Event()
+
+        current_evt = self.thread_stop_event
+        args.check_stop = lambda: current_evt.is_set()
+
+        self._ensure_executor()
+        self.current_thread = threading.Thread(
+            target=self._run_oauth_upgrade_in_thread,
+            args=(args, target_accounts),
+            daemon=True,
+        )
+        self.current_thread.start()
+        return True, "提权任务启动成功"
+
+    def _run_oauth_upgrade_in_thread(self, args, target_accounts):
+        self._perform_initial_cleanup()
+        try:
+            oauth_upgrade_main_loop(args, target_accounts, self.thread_stop_event, executor=self._executor)
+        except Exception as e:
+            print(f"[{ts()}] [CRITICAL] 提权引擎主线程发生崩溃: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            self._finalize_thread_run()
+
 
 
 if __name__ == "__main__":

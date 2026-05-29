@@ -2,8 +2,9 @@ import asyncio
 import json
 import time
 import urllib.parse
-import concurrent.futures
-from typing import List, Any, Optional
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import List, Any, Optional, Union
 from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from pydantic import BaseModel
 from curl_cffi import requests as cffi_requests
@@ -39,6 +40,9 @@ class ImportTeamReq(BaseModel): raw_text: str
 class DeleteTeamReq(BaseModel): ids: list[int]
 class ResetAuthReq(BaseModel):clear_license: bool = False; clear_hwid: bool = False; clear_lease: bool = False;
 class LicenseUploadReq(BaseModel):content: str
+class UpgradeOAuthReq(BaseModel):emails: Union[List[str], str]
+
+
 _last_cloud_sync_time = 0
 
 def parse_cpa_usage_to_details(raw_usage: dict) -> dict:
@@ -253,6 +257,16 @@ async def manual_review_account_action(data: dict, token: str = Depends(verify_t
     return {"status": "error", "message": fail_message}
 
 
+@router.get("/api/image_accounts")
+async def get_image_accounts(
+    page: int = Query(1),
+    page_size: int = Query(50),
+    search: Optional[str] = Query(None),
+    token: str = Depends(verify_token)
+):
+    result = db_manager.get_image_accounts_page(page, page_size, search=search)
+    return {"status": "success", "data": result["data"], "total": result["total"], "page": page, "page_size": page_size}
+
 @router.post("/api/accounts/export_selected")
 async def export_selected_accounts(req: ExportReq, token: str = Depends(verify_token)):
     if not req.emails: return {"status": "error", "message": "未收到任何要导出的账号"}
@@ -461,10 +475,10 @@ def get_cloud_accounts(background_tasks: BackgroundTasks, types: str = "sub2api,
                     extra = item.get("extra", {})
                     account_id = str(item.get("id", ""))
                     window_stats = {}
-                    if account_id:
-                        usage_ok, usage_data = client.get_account_usage(account_id)
-                        if usage_ok and isinstance(usage_data, dict):
-                            window_stats = usage_data.get("data", {}).get("five_hour", {}).get("window_stats", {})
+                    # if account_id:
+                    #     usage_ok, usage_data = client.get_account_usage(account_id)
+                    #     if usage_ok and isinstance(usage_data, dict):
+                    #         window_stats = usage_data.get("data", {}).get("five_hour", {}).get("window_stats", {})
                     return {
                         "id": account_id,
                         "account_type": "sub2api",
@@ -479,7 +493,7 @@ def get_cloud_accounts(background_tasks: BackgroundTasks, types: str = "sub2api,
                             "window_stats": window_stats
                         }
                     }
-                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                with ThreadPoolExecutor(max_workers=10) as executor:
                     results = list(executor.map(process_single_account, raw_sub2_data))
                 combined_data.extend(results)
 
@@ -569,6 +583,31 @@ def get_cloud_accounts(background_tasks: BackgroundTasks, types: str = "sub2api,
     except Exception as e:
         return {"status": "error", "message": f"拉取云端库存数据失败: {e}"}
 
+class BulkUsageRequest(BaseModel):
+    account_ids: List[str]
+
+@router.post("/api/cloud/sub2api/usage/bulk")
+def bulk_get_sub2api_usage(req: BulkUsageRequest, token: str = Depends(verify_token)):
+    if not getattr(cfg, 'SUB2API_URL', None) or not getattr(cfg, 'SUB2API_KEY', None):
+        return {"status": "error", "message": "Sub2API 配置未填写"}
+
+    try:
+        client = Sub2APIClient(api_url=cfg.SUB2API_URL, api_key=cfg.SUB2API_KEY)
+        results = {}
+
+        def fetch_usage(acc_id):
+            ok, data = client.get_account_usage(acc_id)
+            if ok and isinstance(data, dict):
+                return acc_id, data.get("data", {}).get("five_hour", {}).get("window_stats", {})
+            return acc_id, {}
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            for acc_id, stats in executor.map(fetch_usage, req.account_ids):
+                results[acc_id] = stats
+
+        return {"status": "success", "data": results}
+    except Exception as e:
+        return {"status": "error", "message": f"批量获取异常: {str(e)}"}
 
 @router.post("/api/cloud/action")
 def process_cloud_action(req: CloudActionReq, token: str = Depends(verify_token)):
@@ -1006,3 +1045,70 @@ async def reset_auth(req: ResetAuthReq, token: str = Depends(verify_token)):
         return {"status": "success", "message": "选中的授权凭据已成功重置，请重启程序。"}
     else:
         return {"status": "error", "message": "数据库删除操作失败"}
+@router.post("/api/image_accounts/upgrade_oauth")
+async def api_upgrade_image_oauth(req: UpgradeOAuthReq, token: str = Depends(verify_token)):
+    from global_state import engine
+    target_accounts = []
+
+    if req.emails == "ALL":
+        all_accs = db_manager.get_image_accounts_page(1, 999999)["data"]
+        for a in all_accs:
+            acc_token = ""
+            device_id = ""
+            user_agent = ""
+            raw_token = a.get("token_data", "{}")
+            if raw_token:
+                try:
+                    td = json.loads(raw_token) if isinstance(raw_token, str) else raw_token
+                    acc_token = td.get("access_token", "")
+                    device_id = td.get("device_id", "")
+                    user_agent = td.get("user_agent", "")
+                except Exception:
+                    pass
+
+            target_accounts.append({
+                "email": a["email"],
+                "password": a["password"],
+                "access_token": acc_token,
+                "device_id": device_id,
+                "user_agent": user_agent
+            })
+    else:
+        for email in req.emails:
+            info = db_manager.get_account_full_info(email)
+            if info:
+                acc_token = ""
+                device_id = ""
+                user_agent = ""
+                raw_token = info.get("token_data", "{}")
+                if raw_token:
+                    try:
+                        td = json.loads(raw_token) if isinstance(raw_token, str) else raw_token
+                        acc_token = td.get("access_token", "")
+                        device_id = td.get("device_id", "")
+                        user_agent = td.get("user_agent", "")
+                    except Exception:
+                        pass
+
+                target_accounts.append({
+                    "email": email,
+                    "password": info.get("password"),
+                    "access_token": acc_token,
+                    "device_id": device_id,
+                    "user_agent": user_agent
+                })
+
+    if not target_accounts:
+        return {"status": "error", "message": "未找到可处理的账号"}
+
+    class DummyArgs:
+        pass
+
+    args = DummyArgs()
+    args.proxy = cfg.DEFAULT_PROXY if getattr(cfg, 'DEFAULT_PROXY', '').strip() else None
+    ok, msg = engine.start_oauth_upgrade(args, target_accounts)
+
+    if ok:
+        return {"status": "success", "count": len(target_accounts), "message": msg}
+    else:
+        return {"status": "error", "message": msg}

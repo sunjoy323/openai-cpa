@@ -178,7 +178,7 @@ def init_config():
                 print(f"[{ts()}] [WARNING] 自动补全配置文件写入失败: {e}")
 
     return user_config
-APP_VERSION = "v15.0.3"
+APP_VERSION = "v16.0.0"
 _c: dict = {}
 WEB_PASSWORD: str = "admin"
 REGISTER_BACKEND: str = "legacy"
@@ -246,7 +246,7 @@ REMOVE_DEAD_ACCOUNTS: bool = False
 CPA_THREADS: int = 10
 CPA_AUTO_CHECK: bool = True
 CPA_RETAIN_REG_ONLY: bool = False
-
+CPA_AUTO_RE_OAUTH: bool = False
 
 CHECK_INTERVAL_MINUTES: int = 60
 ENABLE_TOKEN_REVIVE: bool = False
@@ -255,7 +255,7 @@ RANDOM_SUB_DOMAIN_LEVEL: bool = False
 ENABLE_SUB2API_MODE: bool = False
 SUB2API_URL: str = ""
 SUB2API_KEY: str = ""
-SUB2API_TEST_MODEL: str = "gpt-5.2"
+SUB2API_TEST_MODEL: str = "gpt-5.4-mini"
 SUB2API_MIN_THRESHOLD: int = 70
 SUB2API_BATCH_COUNT: int = 2
 SUB2API_CHECK_INTERVAL: int = 60
@@ -274,6 +274,7 @@ SUB2API_ENABLE_WS_MODE: bool = True
 SUB2API_DEFAULT_PROXY: str = ""
 SUB2API_DEFAULT_PROXY_POOL: list = []
 SUB2API_RETAIN_REG_ONLY: bool = False
+SUB2API_AUTO_RE_OAUTH: bool = False
 
 ENABLE_IMAGE2API_MODE: bool = False
 IMAGE2API_URL: str = ""
@@ -482,7 +483,7 @@ def reload_all_configs(new_config_dict=None):
     global LOCAL_MS_SUFFIX_MODE, LOCAL_MS_SUFFIX_LEN_MIN, LOCAL_MS_SUFFIX_LEN_MAX
     global DB_TYPE, MYSQL_CFG
     global MAX_LOG_LINES
-    global CPA_RETAIN_REG_ONLY, SUB2API_RETAIN_REG_ONLY, RETAIN_REG_ONLY
+    global CPA_RETAIN_REG_ONLY, SUB2API_RETAIN_REG_ONLY, RETAIN_REG_ONLY, CPA_AUTO_RE_OAUTH, SUB2API_AUTO_RE_OAUTH
     global GMAIL_OAUTH_MASTER_EMAIL, GMAIL_OAUTH_FISSION_ENABLE, GMAIL_OAUTH_FISSION_MODE
     global GMAIL_OAUTH_SUFFIX_MODE, GMAIL_OAUTH_SUFFIX_LEN_MIN, GMAIL_OAUTH_SUFFIX_LEN_MAX
     global DISABLE_FORCED_TAKEOVER
@@ -741,6 +742,7 @@ def reload_all_configs(new_config_dict=None):
     ENABLE_TOKEN_REVIVE = _cpa.get("enable_token_revive", False)
     CPA_AUTO_CHECK = _cpa.get("auto_check", True)
     CPA_RETAIN_REG_ONLY = safe_bool(_cpa.get("retain_reg_only", False))
+    CPA_AUTO_RE_OAUTH = safe_bool(_cpa.get("auto_re_oauth", False))
 
     _sub2api = _c.get("sub2api_mode", {})
     ENABLE_SUB2API_MODE = _sub2api.get("enable", False)
@@ -763,6 +765,7 @@ def reload_all_configs(new_config_dict=None):
     SUB2API_ACCOUNT_GROUP_IDS = parse_group_ids(_sub2api.get("account_group_ids", ""))
     SUB2API_ENABLE_WS_MODE = safe_bool(_sub2api.get("enable_ws_mode", True), default=True)
     SUB2API_RETAIN_REG_ONLY = safe_bool(_sub2api.get("retain_reg_only", False))
+    SUB2API_AUTO_RE_OAUTH = safe_bool(_sub2api.get("auto_re_oauth", False))
 
     raw_sub2api_default_proxy = _sub2api.get("default_proxy", "")
 
