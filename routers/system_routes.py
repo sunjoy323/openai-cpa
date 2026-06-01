@@ -44,11 +44,11 @@ class ClusterSyncTaskCreateReq(BaseModel):
     node_name: str
     secret: str
     task_id: str
-    # file_path: str
-    # file_size: int = 0
+    file_path: str = ""
+    file_size: int = 0
     total_count: int = 0
-    accounts_data: List[Dict[str, Any]]
-    # file_sha256: str = ""
+    accounts_data: Optional[List[Dict[str, Any]]] = None
+    file_sha256: str = ""
 class ClusterUploadAccountsReq(BaseModel):
     node_name: str
     secret: str
@@ -1034,33 +1034,48 @@ def create_cluster_sync_task(req: ClusterSyncTaskCreateReq):
     valid_secret, secret_message = _validate_cluster_secret(req.secret)
     if not valid_secret:
         return {"status": "error", "message": secret_message}
-    shared_dir_str = str(_resolve_cluster_sync_shared_dir())
-    master_local_dir = os.path.join(shared_dir_str, req.node_name)
-    os.makedirs(master_local_dir, exist_ok=True)
-
-    master_local_file = os.path.join(master_local_dir, f"{req.task_id}.json")
-
-    try:
-        with open(master_local_file, 'w', encoding='utf-8') as handle:
-            for acc in req.accounts_data:
-                handle.write(json.dumps(acc, ensure_ascii=False) + "\n")
-        actual_file_size = os.path.getsize(master_local_file)
-    except Exception as e:
-        return {"status": "error", "message": f"主控转存接收到的数据失败: {str(e)}"}
+    accounts_data = req.accounts_data if isinstance(req.accounts_data, list) else None
+    file_sha256 = ""
+    if accounts_data is not None:
+        shared_dir_str = str(_resolve_cluster_sync_shared_dir())
+        master_local_dir = os.path.join(shared_dir_str, req.node_name)
+        os.makedirs(master_local_dir, exist_ok=True)
+        master_local_file = os.path.join(master_local_dir, f"{req.task_id}.jsonl")
+        try:
+            with open(master_local_file, 'w', encoding='utf-8') as handle:
+                for acc in accounts_data:
+                    handle.write(json.dumps(acc, ensure_ascii=False) + "\n")
+            actual_file_size = os.path.getsize(master_local_file)
+        except Exception as e:
+            return {"status": "error", "message": f"主控转存接收到的数据失败: {str(e)}"}
+        file_path = str(master_local_file)
+    else:
+        verified, verify_message, target_path = _verify_cluster_sync_file(
+            req.file_path,
+            expected_size=req.file_size,
+            expected_sha256=req.file_sha256,
+            expected_total_count=req.total_count,
+        )
+        if not verified or target_path is None:
+            return {"status": "error", "message": verify_message or "同步文件校验失败"}
+        file_path = str(target_path)
+        actual_file_size = int(target_path.stat().st_size or 0)
+        file_sha256 = str(req.file_sha256 or '').strip().lower()
 
     ensure_cluster_sync_worker_started()
     if not db_manager.create_cluster_sync_task(
             task_id=req.task_id,
             node_name=req.node_name,
-            file_path=str(master_local_file),
+            file_path=file_path,
             file_size=actual_file_size,
             total_count=max(0, int(req.total_count or 0)),
             max_retries=0,
-            file_sha256="",
+            file_sha256=file_sha256,
     ):
         return {"status": "error", "message": "同步任务已存在"}
 
-    print(f"[{core_engine.ts()}] [系统] 📦 已接收来自子控 [{req.node_name}] 的直传数据，任务 {req.task_id} 等待异步导入。")
+    source_label = "直传数据" if accounts_data is not None else "同步文件"
+    print(f"[{core_engine.ts()}] [系统] 📦 已接收来自子控 [{req.node_name}] 的{source_label}，任务 {req.task_id} 等待异步导入。")
     task = _serialize_cluster_sync_task(db_manager.get_cluster_sync_task(req.task_id))
     return {"status": "success", "task_id": req.task_id, "task": task}
 
