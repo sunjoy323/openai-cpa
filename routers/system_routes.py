@@ -14,8 +14,7 @@ import io
 import shutil
 import json
 from pathlib import Path
-
-from typing import Optional, Any
+from typing import Optional, Any, List, Dict
 from fastapi import APIRouter, Depends, Query, Request, WebSocket, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
@@ -45,10 +44,11 @@ class ClusterSyncTaskCreateReq(BaseModel):
     node_name: str
     secret: str
     task_id: str
-    file_path: str
-    file_size: int = 0
+    # file_path: str
+    # file_size: int = 0
     total_count: int = 0
-    file_sha256: str = ""
+    accounts_data: List[Dict[str, Any]]
+    # file_sha256: str = ""
 class ClusterUploadAccountsReq(BaseModel):
     node_name: str
     secret: str
@@ -1034,29 +1034,35 @@ def create_cluster_sync_task(req: ClusterSyncTaskCreateReq):
     valid_secret, secret_message = _validate_cluster_secret(req.secret)
     if not valid_secret:
         return {"status": "error", "message": secret_message}
-    verified, verify_message, target_path = _verify_cluster_sync_file(
-        req.file_path,
-        expected_size=req.file_size,
-        expected_sha256=req.file_sha256,
-        expected_total_count=req.total_count,
-    )
-    if not verified or target_path is None:
-        return {"status": "error", "message": verify_message or "同步文件校验失败"}
+    shared_dir_str = str(_resolve_cluster_sync_shared_dir())
+    master_local_dir = os.path.join(shared_dir_str, req.node_name)
+    os.makedirs(master_local_dir, exist_ok=True)
+
+    master_local_file = os.path.join(master_local_dir, f"{req.task_id}.json")
+
+    try:
+        with open(master_local_file, 'w', encoding='utf-8') as handle:
+            for acc in req.accounts_data:
+                handle.write(json.dumps(acc, ensure_ascii=False) + "\n")
+        actual_file_size = os.path.getsize(master_local_file)
+    except Exception as e:
+        return {"status": "error", "message": f"主控转存接收到的数据失败: {str(e)}"}
+
     ensure_cluster_sync_worker_started()
     if not db_manager.create_cluster_sync_task(
-        task_id=req.task_id,
-        node_name=req.node_name,
-        file_path=str(target_path),
-        file_size=max(0, int(req.file_size or 0)),
-        total_count=max(0, int(req.total_count or 0)),
-        max_retries=0,
-        file_sha256=str(req.file_sha256 or '').strip().lower(),
+            task_id=req.task_id,
+            node_name=req.node_name,
+            file_path=str(master_local_file),
+            file_size=actual_file_size,
+            total_count=max(0, int(req.total_count or 0)),
+            max_retries=0,
+            file_sha256="",
     ):
         return {"status": "error", "message": "同步任务已存在"}
-    print(f"[{core_engine.ts()}] [系统] 📦 已接收来自子控 [{req.node_name}] 的同步任务 {req.task_id}，等待导入。")
+
+    print(f"[{core_engine.ts()}] [系统] 📦 已接收来自子控 [{req.node_name}] 的直传数据，任务 {req.task_id} 等待异步导入。")
     task = _serialize_cluster_sync_task(db_manager.get_cluster_sync_task(req.task_id))
     return {"status": "success", "task_id": req.task_id, "task": task}
-
 
 @router.get("/api/cluster/sync_tasks")
 async def list_cluster_sync_tasks(limit: int = Query(20), node_name: str = Query(""), status: str = Query(""), token: str = Depends(verify_token)):

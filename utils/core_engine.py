@@ -191,7 +191,7 @@ def set_cpa_auth_file_status(
             status_url,
             headers={"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"},
             json={"name": filename, "disabled": disabled},
-            timeout=15, impersonate="chrome110",
+            timeout=15, impersonate="chrome",
         )
         if res.status_code in (200, 204):
             return True
@@ -215,7 +215,7 @@ def upload_to_cpa_integrated(
         resp = requests.post(
             upload_url, multipart=mime,
             headers={"Authorization": f"Bearer {api_token}"},
-            timeout=30, impersonate="chrome110",
+            timeout=30, impersonate="chrome",
         )
         if resp.status_code in (200, 201):
             return True, "上传成功"
@@ -225,7 +225,7 @@ def upload_to_cpa_integrated(
                 raw_url, data=file_content,
                 headers={"Authorization": f"Bearer {api_token}",
                          "Content-Type": "application/json"},
-                timeout=30, impersonate="chrome110",
+                timeout=30, impersonate="chrome",
             )
             if fb.status_code in (200, 201):
                 return True, "上传成功"
@@ -396,7 +396,7 @@ def test_cliproxy_auth_file(item: dict, api_url: str, api_token: str) -> Tuple[b
         resp = requests.post(
             call_url,
             headers={"Authorization": f"Bearer {api_token}"},
-            json=payload, timeout=60, impersonate="chrome110",
+            json=payload, timeout=60, impersonate="chrome",
         )
         if resp.status_code != 200:
             return False, f"HTTP {resp.status_code}"
@@ -422,7 +422,7 @@ def test_sub2api_account_direct(item: dict, proxy: str) -> Tuple[bool, str]:
 
     if not access_token:
         return False, "缺少 access_token"
-        
+
     headers = {
         "Authorization": f"Bearer {access_token}",
         "User-Agent": DEFAULT_CLIPROXY_UA,
@@ -433,33 +433,33 @@ def test_sub2api_account_direct(item: dict, proxy: str) -> Tuple[bool, str]:
 
     try:
         proxies = {"http": proxy, "https": proxy} if proxy else None
-        
+
         resp = requests.get(
             "https://chatgpt.com/backend-api/wham/usage",
             headers=headers,
             proxies=proxies,
             timeout=30,
-            impersonate="chrome110"
+            impersonate="chrome"
         )
-        
+
         if resp.status_code != 200:
             if resp.status_code == 401: return False, "凭证无效 (HTTP 401)"
             if resp.status_code == 403: return False, "请求被拒绝 (HTTP 403)"
             return False, f"HTTP {resp.status_code}"
-            
+
         data = resp.json()
 
         reason = _extract_cliproxy_failure_reason(data,0)
         if reason:
             return False, reason
-            
+
         pct_str = "未知"
         rl_data = data.get("rate_limit", {})
         if isinstance(rl_data, dict):
             pct = _extract_remaining_percent(rl_data.get("primary_window"))
             if pct is not None:
                 pct_str = f"{pct:.1f}%"
-                
+
         return True, f"实时剩余: {pct_str}"
     except Exception as e:
         return False, f"测活异常: {e}"
@@ -683,7 +683,7 @@ def handle_registration_result(result: Any, cpa_upload: bool = False, run_ctx: d
     password = None
     if result and isinstance(result, (tuple, list)) and len(result) >= 2:
         token_json_str, password = result
-        
+
     ret_status = "success"
     discarded_email_failure = run_ctx.get('discarded_email_failure', False) if run_ctx else False
     domain_failure_reason = str(run_ctx.get('mail_domain_failure_reason', '') or '').strip().lower() if run_ctx else ''
@@ -756,6 +756,10 @@ def handle_registration_result(result: Any, cpa_upload: bool = False, run_ctx: d
                 success, up_msg = upload_to_cpa_integrated(token_data, cfg.CPA_API_URL, cfg.CPA_API_TOKEN)
                 if success:
                     print(f"[{ts()}] [SUCCESS] 补货凭证 {mask_email(account_email)} 云端上传成功！")
+                    try:
+                        db_manager.update_account_push_info([account_email], "CPA", mode="sync")
+                    except Exception:
+                        pass
                 else:
                     print(f"[{ts()}] [ERROR] 云端上传失败: {up_msg}")
 
@@ -808,13 +812,13 @@ def run_and_refresh(proxy, args, cpa_upload=False, skip_switch=False, assigned_d
 
 # def auto_heal_subdomain(failed_domain: str):
     # print(f"[{ts()}] [自愈] 域名 {failed_domain} 达到失败阈值，触发更替程序...")
-    # import wfxl_openai_regst 
+    # import wfxl_openai_regst
     # cf_cfg = getattr(cfg, '_c', {})
     # api_email = cf_cfg.get("cf_api_email")
     # api_key = cf_cfg.get("cf_api_key")
     # root_str = cf_cfg.get("mail_domains", "")
     # root_domains = [d.strip() for d in root_str.split(",") if d.strip()]
-    
+
     # main_dom = None
     # for root in root_domains:
         # if failed_domain.endswith(root):
@@ -823,10 +827,10 @@ def run_and_refresh(proxy, args, cpa_upload=False, skip_switch=False, assigned_d
     # if not main_dom:
         # print(f"[{ts()}] [ERROR] 无法识别 {failed_domain} 所属的主域，请检查配置！")
         # return
-        
-        
+
+
     # level = cf_cfg.get("sub_domain_level", 1)
-    
+
     # try:
         # from cloudflare import Cloudflare
         # cf = Cloudflare(api_email=api_email, api_key=api_key)
@@ -836,7 +840,7 @@ def run_and_refresh(proxy, args, cpa_upload=False, skip_switch=False, assigned_d
             # url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/email/routing/dns"
             # headers = {"X-Auth-Email": api_email, "X-Auth-Key": api_key, "Content-Type": "application/json"}
             # payload = json.dumps({"name": failed_domain}).encode('utf-8')
-            # requests.delete(url, data=payload, headers=headers, impersonate="chrome110")
+            # requests.delete(url, data=payload, headers=headers, impersonate="chrome")
             # wfxl_openai_regst.dispatch_email_backend_delete(failed_domain, cf_cfg)
             # print(f"[{ts()}] [自愈] 已成功注销失效域名: {mask_email(failed_domain)}")
     # except Exception as e:
@@ -1642,7 +1646,12 @@ async def sub2api_main_loop(args, async_stop_event: asyncio.Event, executor=None
                         else:
                             if hasattr(client, "add_account"):
                                 ok, msg = client.add_account(token_dict)
-                                if ok: print(f"[{ts()}] [SUCCESS] Sub2API 补货入库成功")
+                                if ok:
+                                    print(f"[{ts()}] [SUCCESS] Sub2API 补货入库成功")
+                                    try:
+                                        db_manager.update_account_push_info([token_dict.get("email", "")], "SUB2API", mode="sync")
+                                    except Exception:
+                                        pass
                                 else: print(f"[{ts()}] [ERROR] Sub2API 补货入库失败: {msg}")
                     return status
 
@@ -1866,6 +1875,10 @@ def handle_oauth_upgrade_result(email: str, result: Any, run_ctx: dict = None) -
             success, up_msg = upload_to_cpa_integrated(token_data, cfg.CPA_API_URL, cfg.CPA_API_TOKEN)
             if success:
                 print(f"[{ts()}] [SUCCESS] [提权] 凭证 {mask_email(email)} 已同步至 CPA 云端！")
+                try:
+                    db_manager.update_account_push_info([email], "CPA", mode="sync")
+                except Exception:
+                    pass
             else:
                 print(f"[{ts()}] [ERROR] [提权] 云端上传失败: {up_msg}")
 
@@ -1879,6 +1892,10 @@ def handle_oauth_upgrade_result(email: str, result: Any, run_ctx: dict = None) -
                 ok, msg = client.add_account(token_data)
                 if ok:
                     print(f"[{ts()}] [SUCCESS] [提权] 凭证 {mask_email(email)} 已同步至 Sub2API")
+                    try:
+                        db_manager.update_account_push_info([email], "SUB2API", mode="sync")
+                    except Exception:
+                        pass
                 else:
                     print(f"[{ts()}] [ERROR] [提权] Sub2API 补货入库失败: {msg}")
 
