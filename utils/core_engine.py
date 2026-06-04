@@ -75,6 +75,7 @@ from utils.email_providers.postman_center import global_postman_fleet
 _stats_lock = threading.Lock()
 sub_fail_counts = {}
 _heal_lock = threading.Lock()
+_oauth_revive_semaphore = threading.Semaphore(10)
 DEFAULT_CLIPROXY_UA = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
 run_stats = {
     "success": 0,
@@ -589,23 +590,29 @@ def process_account_worker(i: int, total: int, item: dict, args: Any) -> bool:
     if not refresh_success:
         if getattr(cfg, 'CPA_AUTO_RE_OAUTH', False):
             print(f"[{ts()}] [INFO] 测活: {mask_email(name)} 尝试终极抢救 -> 自动重走 OAuth 提权流程")
-            full_info = db_manager.get_account_full_info(email)
-            if full_info:
-                password = full_info.get("password")
-                if not password:
-                    print(f"[{ts()}] [INFO] 测活: {mask_email(name)} 无密码记录，将尝试 [无密码 OTP] 通道提取")
-                    password = "Takeover_NoPassword"
+            jitter = random.uniform(1.0, 3.0)
+            time.sleep(jitter)
+            with _oauth_revive_semaphore:
+                print(f"[{ts()}] [INFO] 测活: {mask_email(name)} 获取到抢救队列执行权，开始提权流程")
+                full_info = db_manager.get_account_full_info(email)
+                if full_info:
+                    password = full_info.get("password")
+                    if not password:
+                        print(f"[{ts()}] [INFO] 测活: {mask_email(name)} 无密码记录，将尝试 [无密码 OTP] 通道提取")
+                        password = "Takeover_NoPassword"
 
-                raw_token = full_info.get("token_data", {})
-                acc_token = raw_token.get("access_token", "") if isinstance(raw_token, dict) else ""
-                device_id = raw_token.get("device_id", "") if isinstance(raw_token, dict) else ""
-                user_agent = raw_token.get("user_agent", "") if isinstance(raw_token, dict) else ""
-                res = run_oauth_only_and_sync(email, password, args.proxy, args, access_token=acc_token,
-                                              device_id=device_id, user_agent=user_agent)
-                if res == "success":
-                    return True
-            else:
-                print(f"[{ts()}] [WARNING] 测活: {mask_email(name)} 本地库彻底查无此号，放弃抢救")
+                    raw_token = full_info.get("token_data", {})
+                    acc_token = raw_token.get("access_token", "") if isinstance(raw_token, dict) else ""
+                    device_id = raw_token.get("device_id", "") if isinstance(raw_token, dict) else ""
+                    user_agent = raw_token.get("user_agent", "") if isinstance(raw_token, dict) else ""
+
+                    res = run_oauth_only_and_sync(email, password, args.proxy, args, access_token=acc_token,
+                                                  device_id=device_id, user_agent=user_agent)
+                    time.sleep(random.uniform(1.0, 3.0))
+                    if res == "success":
+                        return True
+                else:
+                    print(f"[{ts()}] [WARNING] 测活: {mask_email(name)} 本地库彻底查无此号，放弃抢救")
         try:
             db_manager.update_account_status([email], 0)
         except Exception:
@@ -1055,25 +1062,30 @@ def process_sub2api_worker(i: int, total: int, item: dict, client: Any, args: An
     if not refresh_success:
         if getattr(cfg, 'SUB2API_AUTO_RE_OAUTH', False):
             print(f"[{ts()}] [INFO] Sub2API测活: {mask_email(name)} 尝试终极抢救 -> 重走 OAuth 提权流程")
-            full_info = db_manager.get_account_full_info(name)
+            time.sleep(random.uniform(1.0, 3.0))
+            with _oauth_revive_semaphore:
+                print(f"[{ts()}] [INFO] Sub2API测活: {mask_email(name)} 开始执行 OAuth 提权流程")
+                full_info = db_manager.get_account_full_info(name)
 
-            if full_info:
-                password = full_info.get("password")
-                if not password:
-                    print(f"[{ts()}] [INFO] Sub2API测活: {mask_email(name)} 无密码记录，将尝试 [无密码 OTP] 通道提取")
-                    password = "Takeover_NoPassword"
+                if full_info:
+                    password = full_info.get("password")
+                    if not password:
+                        print(f"[{ts()}] [INFO] Sub2API测活: {mask_email(name)} 无密码记录，将尝试 [无密码 OTP] 通道提取")
+                        password = "Takeover_NoPassword"
 
-                raw_token = full_info.get("token_data", {})
-                acc_token = raw_token.get("access_token", "") if isinstance(raw_token, dict) else ""
-                device_id = raw_token.get("device_id", "") if isinstance(raw_token, dict) else ""
-                user_agent = raw_token.get("user_agent", "") if isinstance(raw_token, dict) else ""
+                    raw_token = full_info.get("token_data", {})
+                    acc_token = raw_token.get("access_token", "") if isinstance(raw_token, dict) else ""
+                    device_id = raw_token.get("device_id", "") if isinstance(raw_token, dict) else ""
+                    user_agent = raw_token.get("user_agent", "") if isinstance(raw_token, dict) else ""
 
-                res = run_oauth_only_and_sync(name, password, args.proxy, args, access_token=acc_token,
-                                              device_id=device_id, user_agent=user_agent)
-                if res == "success":
-                    return True
-            else:
-                print(f"[{ts()}] [WARNING] Sub2API测活: {mask_email(name)} 本地库彻底查无此号，放弃抢救")
+                    res = run_oauth_only_and_sync(name, password, args.proxy, args, access_token=acc_token,
+                                                  device_id=device_id, user_agent=user_agent)
+                    time.sleep(random.uniform(1.0, 3.0))
+
+                    if res == "success":
+                        return True
+                else:
+                    print(f"[{ts()}] [WARNING] Sub2API测活: {mask_email(name)} 本地库彻底查无此号，放弃抢救")
         try:
             db_manager.update_account_status_by_truncated_name(name, 0)
         except Exception:

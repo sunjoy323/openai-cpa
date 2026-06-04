@@ -976,6 +976,7 @@ def run(
                             if oauth_attempt == 0 and getattr(cfg, 'TEAM_MODE_ENABLE', False):
                                 print(
                                     f"[{cfg.ts()}] [WARNING] （{mask_email(email)}） OAuth重试中...")
+                                time.sleep(random.uniform(2.0, 4.0))
                                 oauth_needs_retry = True
                                 break
                             print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}） OAuth链路触发风控，进入手机号验证...")
@@ -1104,13 +1105,12 @@ def run_oauth_only(email: str, password: str, proxy: Optional[str], run_ctx: dic
     try:
         print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}）执行静默获取 Token...")
         OAUTH_MAX_RETRIES = 2
-
+        oauth_log = generate_oauth_url()
         for oauth_attempt in range(OAUTH_MAX_RETRIES):
             s_log = requests.Session(proxies=proxies, impersonate="chrome")
             s_log.headers.update({"Connection": "close"})
             s_log.cookies.clear()
             s_log.timeout = 30
-            oauth_log = generate_oauth_url()
 
             resp, current_url = _follow_redirect_chain_local(s_log, oauth_log.auth_url, proxies)
             if "code=" in current_url and "state=" in current_url:
@@ -1415,9 +1415,11 @@ def run_oauth_only(email: str, password: str, proxy: Optional[str], run_ctx: dic
                     else:
                         break
                 elif "/add-phone" in current_url:
-                    if oauth_attempt == 0 and getattr(cfg, 'TEAM_MODE_ENABLE', False):
+                    # if oauth_attempt == 0 and getattr(cfg, 'TEAM_MODE_ENABLE', False):
+                    if oauth_attempt == 0:
                         print(
                             f"[{cfg.ts()}] [WARNING] （{mask_email(email)}） OAuth重试中...")
+                        time.sleep(random.uniform(2.0, 4.0))
                         oauth_needs_retry = True
                         break
                     print(f"[{cfg.ts()}] [INFO] （{mask_email(email)}） OAuth链路触发风控，进入手机号验证...")

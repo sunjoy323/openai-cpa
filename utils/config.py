@@ -178,7 +178,7 @@ def init_config():
                 print(f"[{ts()}] [WARNING] 自动补全配置文件写入失败: {e}")
 
     return user_config
-APP_VERSION = "v16.0.2"
+APP_VERSION = "v16.0.4"
 _c: dict = {}
 WEB_PASSWORD: str = "admin"
 REGISTER_BACKEND: str = "legacy"
@@ -326,6 +326,7 @@ SMSBOWER_POLL_TIMEOUT_SEC = 180
 SMSBOWER_MIN_PRICE = 0.05
 SMSBOWER_OPERATOR = ""
 SMSBOWER_USE_PROXY: bool = False
+SMSBOWER_WEB_COOKIE = ""
 
 # 5SIM
 FIVESIM_ENABLED = False
@@ -489,7 +490,7 @@ def reload_all_configs(new_config_dict=None):
     global DISABLE_FORCED_TAKEOVER
     global SMSBOWER_ENABLED, SMSBOWER_API_KEY, SMSBOWER_BASE_URL, SMSBOWER_COUNTRY, SMSBOWER_SERVICE
     global SMSBOWER_AUTO_PICK_COUNTRY, SMSBOWER_VERIFY_ON_REGISTER, SMSBOWER_REUSE_PHONE, SMSBOWER_OPERATOR, SMSBOWER_USE_PROXY
-    global SMSBOWER_MAX_PRICE, SMSBOWER_MIN_BALANCE, SMSBOWER_MAX_TRIES, SMSBOWER_POLL_TIMEOUT_SEC, SMSBOWER_MIN_PRICE
+    global SMSBOWER_MAX_PRICE, SMSBOWER_MIN_BALANCE, SMSBOWER_MAX_TRIES, SMSBOWER_POLL_TIMEOUT_SEC, SMSBOWER_MIN_PRICE, SMSBOWER_WEB_COOKIE
     global FIVESIM_ENABLED, FIVESIM_API_KEY, FIVESIM_SERVICE, FIVESIM_COUNTRY
     global FIVESIM_AUTO_PICK_COUNTRY, FIVESIM_VERIFY_ON_REGISTER, FIVESIM_REUSE_PHONE
     global FIVESIM_MAX_PRICE, FIVESIM_MIN_PRICE, FIVESIM_MIN_BALANCE, FIVESIM_OPERATOR
@@ -885,7 +886,7 @@ def reload_all_configs(new_config_dict=None):
     SMSBOWER_REUSE_MAX = safe_int(_smsbower.get("reuse_max", 2), default=2)
     SMSBOWER_OPERATOR = str(_smsbower.get("operator", ) or "").strip()
     SMSBOWER_USE_PROXY = safe_bool(_smsbower.get("use_proxy", False), default=False)
-
+    SMSBOWER_WEB_COOKIE = str(_smsbower.get("web_cookie", ) or "").strip()
     _fivesim = _c.get("fivesim", {})
     FIVESIM_ENABLED = safe_bool(_fivesim.get("enabled", False), default=False)
     FIVESIM_API_KEY = str(_fivesim.get("api_key") or "").strip()

@@ -343,6 +343,7 @@ smsbower:
   reuse_max: 2
   operator: ""
   use_proxy: false
+  web_cookie: ""
 
 fivesim:
   enabled: false

@@ -434,7 +434,7 @@ createApp({
                 ai_base: true, cluster_url: true, proxy: true, clash_api: true,
                 clash_test: true, tg_token: false, tg_chatid: false, cpa_url: true, sub_url: true,
                 cluster_secret: false, hero_key: false, duck_token: false, duck_cookie: false,
-                smsbower_key: false,fivesim_key: false,
+                smsbower_key: false,fivesim_key: false,smsbower_cookie: false,
                 luckmail: false,
                 temporam: false,
                 tmailor_token: false,
