@@ -496,3 +496,86 @@ def try_verify_phone_via_fivesim(session: requests.Session, *, proxies: Any, hin
         return False, last_reason
     finally:
         pass
+
+
+def get_phone_for_signup(proxies: Any) -> tuple[str, str, str, str]:
+    if not _fivesim_enabled():
+        return "", "", "", "5SIM 未配置或未开启"
+
+    max_tries = _fivesim_max_tries()
+    service_code = str(getattr(cfg, 'FIVESIM_SERVICE', 'openai')).strip() or "openai"
+    pref_country = str(getattr(cfg, 'FIVESIM_COUNTRY', 'any')).strip()
+    excluded = set()
+    reuse_on = _fivesim_reuse_enabled()
+
+    country = _fivesim_pick_country(proxies, service_code, pref_country, excluded)
+    _info(f"5SIM 手机首发分配: 目标国家为 {country} (服务: {service_code})")
+
+    last_gerr = ""
+    for attempt in range(1, max_tries + 1):
+        if getattr(cfg, 'GLOBAL_STOP', False):
+            break
+
+        _info(f"[{attempt}/{max_tries}] 正在向 5SIM 请求首发全新号码 (国家: {country})...")
+        aid, phone, gerr, cost = _fivesim_get_number(proxies, service=service_code, country=country,
+                                                     enable_reuse=reuse_on)
+
+        if aid:
+            _info(f"📱 成功取到全新号码 (用于首发注册): {phone} (订单: {aid} | 扣费: {cost} $)")
+            if reuse_on:
+                _fivesim_reuse_set(aid, phone, service_code, country)
+            return aid, phone, country, ""
+
+        last_gerr = gerr
+        _warn(f"⚠️ 第 {attempt}/{max_tries} 次首发取号失败: {gerr}")
+
+        if "balance" in str(gerr).lower():
+            _warn("❌ 5SIM 余额不足，直接退出！")
+            break
+
+        if attempt < max_tries and _fivesim_auto_pick() and "no free phones" in str(gerr).lower():
+            excluded.add(country)
+            country = _fivesim_pick_country(proxies, service_code, pref_country, excluded)
+            _info(f"🔄 自动切换至备选国家: {country}")
+
+        _sleep_interruptible(2.0)
+
+    return "", "", "", last_gerr
+
+
+def wait_code_for_signup(order_id: str, proxies: Any) -> str:
+    timeout_sec = _fivesim_poll_timeout()
+    started = time.time()
+    _info(f"⏳ 正在等待 5SIM 首发注册短信验证码...")
+    last_print = time.time()
+
+    while time.time() - started < timeout_sec:
+        _raise_if_stopped()
+        ok, text, data = _fivesim_request("GET", f"user/check/{order_id}", proxies)
+
+        if time.time() - last_print > 8:
+            status = data.get('status', 'WAITING') if data else 'UNKNOWN'
+            _info(f"🔄 仍在等待短信中... (当前状态: {status})")
+            last_print = time.time()
+
+        if ok and data and data.get("status") in ["RECEIVED", "PENDING"]:
+            sms_list = data.get("sms", [])
+            if sms_list:
+                code = str(sms_list[-1].get("code", ""))
+                if code:
+                    _info(f"🎉 成功接收到首发短信验证码: {code}")
+                    return code
+        elif ok and data and data.get("status") in ["CANCELED", "BANNED", "TIMEOUT"]:
+            _warn(f"❌ 5SIM 订单已取消或超时: {data.get('status')}")
+            return ""
+
+        _sleep_interruptible(3.0)
+
+    _warn("⚠5SIM 接码彻底超时！")
+    return ""
+
+def report_signup_result(order_id: str, country: str, success: bool, reason: str, proxies: Any) -> None:
+    if success:
+        _fivesim_set_status("finish", order_id, proxies)
+    else:
+        _fivesim_set_status("ban", order_id, proxies)

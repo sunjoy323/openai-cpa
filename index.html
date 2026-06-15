@@ -286,16 +286,16 @@
                             <div v-if="config" class="console-flow-control shrink-0">
                                 <div class="console-flow-control-inner">
                                     <div class="console-mode-switch-inner bg-slate-100 p-1 rounded-xl shadow-inner border border-slate-200 shrink-0">
-                                        <button @click="changeRegMode('protocol')"
+                                        <button @click="changeRegMode('email')"
                                                 :class="['flex-1 py-1.5 md:py-2 px-2 md:px-3 rounded-lg text-xs md:text-sm font-bold transition-all whitespace-nowrap',
-                                                         config.reg_mode === 'protocol' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700']">
-                                            协议
+                                                         config.reg_mode === 'email' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700']">
+                                            邮箱
                                         </button>
-<!--                                        <button @click="changeRegMode('extension')"-->
-<!--                                                :class="['flex-1 py-1.5 md:py-2 px-2 md:px-3 rounded-lg text-xs md:text-sm font-bold transition-all whitespace-nowrap',-->
-<!--                                                         config.reg_mode === 'extension' ? 'bg-white text-green-600 shadow-sm' : 'text-slate-500 hover:text-slate-700']">-->
-<!--                                            古法-->
-<!--                                        </button>-->
+                                        <button @click="changeRegMode('phone')"
+                                                :class="['flex-1 py-1.5 md:py-2 px-2 md:px-3 rounded-lg text-xs md:text-sm font-bold transition-all whitespace-nowrap',
+                                                         config.reg_mode === 'phone' ? 'bg-white text-green-600 shadow-sm' : 'text-slate-500 hover:text-slate-700']">
+                                            手机
+                                        </button>
                                     </div>
                                     <label class="console-backend-select" title="切换注册流程">
                                         <span class="console-backend-select-label">流程</span>

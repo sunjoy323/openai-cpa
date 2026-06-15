@@ -1038,20 +1038,20 @@ def _try_verify_phone_via_hero_sms(
     last_reason = "HeroSMS 手机验证失败"
     lock_acquired = False
 
-    serial_on = True
-    wait_sec = 180
+    # serial_on = True
+    # wait_sec = 180
     verify_balance_start = -1.0
 
-    if serial_on:
-        _info("等待 HeroSMS 手机验证锁...")
-        started = time.time()
-        while True:
-            _raise_if_stopped()
-            if _HERO_SMS_VERIFY_LOCK.acquire(timeout=0.5):
-                lock_acquired = True
-                break
-            if time.time() - started >= wait_sec:
-                return False, "HeroSMS 手机验证排队超时"
+    # if serial_on:
+    #     _info("等待 HeroSMS 手机验证锁...")
+    #     started = time.time()
+    #     while True:
+    #         _raise_if_stopped()
+    #         if _HERO_SMS_VERIFY_LOCK.acquire(timeout=0.5):
+    #             lock_acquired = True
+    #             break
+    #         if time.time() - started >= wait_sec:
+    #             return False, "HeroSMS 手机验证排队超时"
 
     def _verify_once(
             activation_id: str,
@@ -1390,8 +1390,68 @@ def _try_verify_phone_via_hero_sms(
                 )
         except Exception:
             pass
-        if lock_acquired:
-            try:
-                _HERO_SMS_VERIFY_LOCK.release()
-            except Exception:
-                pass
+        # if lock_acquired:
+        #     try:
+        #         _HERO_SMS_VERIFY_LOCK.release()
+        #     except Exception:
+        #         pass
+
+def get_phone_for_signup(proxies: Any) -> tuple[str, str, int, str]:
+    if not _hero_sms_enabled():
+        return "", "", 0, "HeroSMS 未配置或未开启"
+
+    max_tries = _hero_sms_max_tries()
+    service_code = _hero_sms_resolve_service_code(proxies)
+    pref_country = _hero_sms_resolve_country_id(proxies)
+    excluded = set()
+    reuse_on = _hero_sms_reuse_enabled()
+
+    country_id = _hero_sms_pick_country_id(proxies, service_code=service_code, preferred_country=pref_country)
+    _info(f"HeroSMS 手机首发分配: 目标国家ID为 {country_id} (服务: {service_code})")
+    last_gerr = ""
+    for attempt in range(1, max_tries + 1):
+        if getattr(cfg, 'GLOBAL_STOP', False):
+            break
+
+        _info(f"[{attempt}/{max_tries}] 正在向 HeroSMS 请求首发全新号码 (国家: {country_id})...")
+        aid, phone, gerr = _hero_sms_get_number(proxies, service_code=service_code, country_id=country_id)
+
+        if aid:
+            _info(f"📱 成功取到全新号码 (用于首发注册): {phone} (订单: {aid})")
+            if reuse_on:
+                _hero_sms_reuse_set(aid, phone, service_code, country_id)
+            return aid, phone, country_id, ""
+
+        last_gerr = gerr
+        _warn(f"⚠️ 第 {attempt}/{max_tries} 次首发取号失败: {gerr}")
+
+        if _is_hero_sms_balance_issue(gerr):
+            _warn("❌ HeroSMS 余额不足，直接退出！")
+            break
+
+        if attempt < max_tries and _hero_sms_auto_pick_country() and _is_hero_sms_no_numbers_issue(gerr):
+            excluded.add(country_id)
+            country_id = _hero_sms_pick_country_id(
+                proxies, service_code=service_code, preferred_country=pref_country,
+                exclude_country_ids=excluded, force_refresh=True
+            )
+            _info(f"🔄 自动切换至备选国家 ID: {country_id}")
+
+        _sleep_interruptible(2.0)
+
+    return "", "", 0, last_gerr
+
+
+def wait_code_for_signup(activation_id: str, proxies: Any) -> str:
+    return _hero_sms_poll_code(activation_id, proxies)
+
+
+def report_signup_result(activation_id: str, country_id: int, success: bool, reason: str, proxies: Any) -> None:
+    _hero_sms_country_record_result(country_id, success, reason)
+    if success:
+        _hero_sms_country_mark_success(country_id)
+        _hero_sms_set_status(activation_id, 6, proxies)
+    else:
+        if _is_hero_sms_timeout_issue(reason) or "fraud_guard" in str(reason).lower():
+            _hero_sms_country_mark_timeout(country_id)
+        _hero_sms_set_status(activation_id, 8, proxies)

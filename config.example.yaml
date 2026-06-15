@@ -4,7 +4,7 @@
 # https://github.com/maillab/cloud-mail
 # https://github.com/s12ryt/mail-curl
 
-reg_mode: "protocol"
+reg_mode: "email"
 # 注册后端:
 # legacy = 本地旧版注册流程，不需要 wenfxl.license
 # auth_pipeline = 上游新版注册流水线，需要 wenfxl.license 授权凭证

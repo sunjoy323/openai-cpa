@@ -178,7 +178,7 @@ def init_config():
                 print(f"[{ts()}] [WARNING] 自动补全配置文件写入失败: {e}")
 
     return user_config
-APP_VERSION = "v16.0.4"
+APP_VERSION = "v16.1.1"
 _c: dict = {}
 WEB_PASSWORD: str = "admin"
 REGISTER_BACKEND: str = "legacy"
@@ -378,7 +378,7 @@ CLUSTER_SYNC_REQUIRE_CUSTOM_SECRET: bool = True
 TEMPORAM_COOKIE: str = ""
 FVIA_TOKEN: str = ""
 TMAILOR_CURRENT_TOKEN: str = ""
-REG_MODE: str = "protocol"
+REG_MODE: str = "email"
 DB_TYPE: str = "sqlite"
 MYSQL_CFG: dict = {}
 _sub2api_proxy_rotation_lock = threading.Lock()
@@ -947,7 +947,7 @@ def reload_all_configs(new_config_dict=None):
     CLUSTER_SYNC_MAX_RECORDS = safe_int(_c.get("cluster_sync_max_records", 100000), 100000, minimum=1)
     CLUSTER_SYNC_REQUIRE_CUSTOM_SECRET = safe_bool(_c.get("cluster_sync_require_custom_secret", True), default=True)
 
-    REG_MODE = str(_c.get("reg_mode", "protocol")).strip().lower()
+    REG_MODE = str(_c.get("reg_mode", "email")).strip().lower()
 
     _temporam = _c.get("temporam", {})
     TEMPORAM_COOKIE = str(_temporam.get("cookie") or "").strip()

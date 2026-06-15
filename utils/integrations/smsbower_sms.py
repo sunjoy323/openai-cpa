@@ -825,5 +825,34 @@ def try_verify_phone_via_smsbower(session: requests.Session, *, proxies: Any, hi
         except:
             pass
         # if lock_acquired: _SMSBOWER_VERIFY_LOCK.release()
+
+def get_phone_for_signup(proxies: Any) -> tuple[str, str, int, str]:
+    if not _smsbower_enabled():
+        return "", "", 0, "SmsBower 未开启或未配置 API Key"
+    service_code = _smsbower_resolve_service_code(proxies)
+    pref_country = _smsbower_resolve_country_id(proxies)
+    country_id = _smsbower_pick_country_id(proxies, service_code=service_code, preferred_country=pref_country)
+    _info(f"SmsBower 国家分配: 目标国家ID为 {country_id} (服务代码: {service_code})")
+    aid, phone, gerr, cost = _smsbower_get_number(proxies, service_code=service_code, country_id=country_id)
+    if aid:
+        cost_display = f"{cost} $" if cost and cost != "未知" else "未知"
+        _info(f"📱 成功取到新号码: (用于首发注册): {phone} (订单ID: {aid} | 扣费: {cost_display})")
+        return aid, phone, country_id, ""
+    return "", "", 0, gerr
+
+
+def wait_code_for_signup(activation_id: str, proxies: Any) -> str:
+    return _smsbower_poll_code(activation_id, proxies, timeout_override=0)
+
+def report_signup_result(activation_id: str, country_id: int, success: bool, reason: str, proxies: Any) -> None:
+    _smsbower_country_record_result(country_id, success, reason)
+    if success:
+        _smsbower_country_mark_success(country_id)
+        _smsbower_set_status(activation_id, 6, proxies)
+    else:
+        if "超时" in reason or "fraud_guard" in reason:
+            _smsbower_country_mark_timeout(country_id)
+        _smsbower_set_status(activation_id, 8, proxies)
+
 def handle_smsbower_verification(session, proxies, hint_url="", device_id: str = "", user_agent: str = "", run_ctx: dict = None, proxy: Optional[str] = None):
     return try_verify_phone_via_smsbower(session, proxies=proxies, hint_url=hint_url, device_id=device_id, user_agent=user_agent, run_ctx=run_ctx, proxy=proxy)
